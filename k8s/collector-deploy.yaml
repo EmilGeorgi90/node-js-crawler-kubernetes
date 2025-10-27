@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crawler-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: crawler-collector }
+  template:
+    metadata:
+      labels: { app: crawler-collector }
+    spec:
+      containers:
+        - name: collector
+          image: your-registry/crawler-cluster:latest
+          command: ["node", "dist/collector.js"]
+          envFrom:
+            - configMapRef: { name: crawler-config }
+          volumeMounts:
+            - name: out
+              mountPath: /data
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+      volumes:
+        - name: out
+          persistentVolumeClaim: { claimName: crawler-out }

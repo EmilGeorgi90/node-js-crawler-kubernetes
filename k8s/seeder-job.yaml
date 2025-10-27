@@ -1,0 +1,15 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: crawler-seeder
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: seeder
+          image: your-registry/crawler-cluster:latest
+          command: ["node", "dist/seeder.js"]
+          envFrom:
+            - configMapRef: { name: crawler-config }

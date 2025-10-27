@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crawler-workers
+spec:
+  replicas: 6  # scale this up/down
+  selector:
+    matchLabels: { app: crawler-worker }
+  template:
+    metadata:
+      labels: { app: crawler-worker }
+    spec:
+      containers:
+        - name: worker
+          image: your-registry/crawler-cluster:latest
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/worker.js"]
+          envFrom:
+            - configMapRef: { name: crawler-config }
+          resources:
+            requests: { cpu: "200m", memory: "256Mi" }
+            limits:   { cpu: "1000m", memory: "1Gi" }

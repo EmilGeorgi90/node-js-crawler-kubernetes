@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: crawler-config
+data:
+  REDIS_URL: redis://redis:6379
+  QUEUE_KEY: crawl:queue
+  RESULTS_KEY: crawl:results
+  VISITED_KEY: crawl:visited
+  HOST_SEM_PREFIX: crawl:host:
+  SELECTOR: body
+  MAX_DEPTH: "3"
+  PER_HOST: "6"
+  HEADLESS: "true"
+  # Optional cookie for consent on dev
+  # COOKIE_URL: https://devlauritz.com
+  # COOKIE_NAME: CookieConsent
+  # COOKIE_VALUE: <value>
+  # Seed URL (used by seeder job)
+  SEED_URL: https://www.lauritz.com/da/auctions
