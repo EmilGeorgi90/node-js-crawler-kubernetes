@@ -10,5 +10,5 @@ docker compose up -d --scale worker=4
 # Seed the queue (one-off)
 docker run --rm --network host \
   -e REDIS_URL=redis://localhost:6379 \
-  -e SEED_URL=https://www.lauritz.com/da/auctions \
+  -e SEED_URL=https://example.com/ \
   your-registry/crawler-cluster:latest node dist/seeder.js
