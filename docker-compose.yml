@@ -1,0 +1,27 @@
+version: "3.9"
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+  worker:
+    image: nest-crawler/crawler-cluster:latest
+    depends_on: [redis]
+    environment:
+      REDIS_URL: redis://redis:6379
+      SELECTOR: body
+      MAX_DEPTH: "3"
+      PER_HOST: "6"
+      HEADLESS: "true"
+    command: ["node", "dist/worker.js"]
+    scale: 4  # docker compose v2 supports `--scale`; alternatively start multiple worker services
+  collector:
+    image: nest-crawler/crawler-cluster:latest
+    depends_on: [redis]
+    environment:
+      REDIS_URL: redis://redis:6379
+      OUT_PATH: /data/out.jsonl
+    command: ["node", "dist/collector.js"]
+    volumes:
+      - ./data:/data
