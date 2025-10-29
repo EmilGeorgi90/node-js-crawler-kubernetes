@@ -4,7 +4,7 @@ a horizontal scaling version of the nest.js crawler
 # Build local image
 docker build -t your-registry/crawler-cluster:latest .
 
-# Start Redis + 4 worker + collector
+# Start Redis + 4 workers + collector
 docker compose up -d --scale worker=4
 
 # Seed the queue (one-off)
