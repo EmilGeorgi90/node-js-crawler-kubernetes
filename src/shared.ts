@@ -6,10 +6,10 @@ export const canon = (url: string) => {
   try {
     return normalizeUrl(url, {
       stripHash: true,
-      stripWWW: false,
+      stripWWW: true,
       removeQueryParameters: [/^utm_\w+/i, "fbclid", "gclid"],
       sortQueryParameters: true,
-      removeTrailingSlash: false,
+      removeTrailingSlash: true,
     });
   } catch {
     return url;
