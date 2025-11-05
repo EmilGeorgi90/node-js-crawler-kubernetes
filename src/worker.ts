@@ -13,6 +13,7 @@ const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
 const QUEUE_KEY = process.env.QUEUE_KEY || "crawl:queue";
 const RESULTS_KEY = process.env.RESULTS_KEY || "crawl:results";
 const VISITED_KEY = process.env.VISITED_KEY || "crawl:visited";
+const SEEN_KEY = process.env.SEEN_KEY || "crawl:seen"; // NEW: gate to avoid enqueueing duplicates
 const HOST_SEM_PREFIX = process.env.HOST_SEM_PREFIX || "crawl:host:"; // + origin + ':inflight'
 
 const SELECTOR = process.env.SELECTOR || "body";
@@ -27,6 +28,7 @@ const COOKIE_URL = process.env.COOKIE_URL; // optional
 const COOKIE_NAME = process.env.COOKIE_NAME; // optional
 const COOKIE_VALUE = process.env.COOKIE_VALUE; // optional
 
+// Per-host semaphore (limit in-flight per origin)
 const luaTryAcquire = `
 local key = KEYS[1]
 local limit = tonumber(ARGV[1])
@@ -39,9 +41,23 @@ else
 end
 `;
 
+// NEW: Enqueue only if URL hasn't been seen before (atomic SADD+RPUSH)
+const luaEnqueueIfNew = `
+local seen = KEYS[1]
+local q = KEYS[2]
+local task = ARGV[1]
+local url = ARGV[2]
+if redis.call('SADD', seen, url) == 1 then
+  return redis.call('RPUSH', q, task)
+else
+  return 0
+end
+`;
+
 (async () => {
   const redis = new Redis(REDIS_URL);
   const tryAcquireSha = await redis.script("LOAD", luaTryAcquire);
+  const enqIfNewSha = await redis.script("LOAD", luaEnqueueIfNew);
   const allowRobots = allowedByRobotsFactory();
 
   const { browser, context } = await launchBrowser(HEADLESS);
@@ -72,11 +88,14 @@ end
       const origin = new URL(url).origin;
       if (origin !== task.origin) continue; // same-origin policy here
 
-      // dedupe
+      // Mark as visited when we start processing (for metrics)
       const added = await redis.sadd(VISITED_KEY, url);
-      if (added === 0) continue;
+      if (added === 0) {
+        // Already processing/processed; skip (queue was deduped by SEEN, but keep safe)
+        continue;
+      }
 
-      // per-host semaphore acquire
+      // Per-host semaphore acquire
       while (true) {
         const ok = await redis.evalsha(
           String(tryAcquireSha),
@@ -102,7 +121,7 @@ end
           page,
           SELECTOR
         );
-        // publish result
+        // Publish result
         await redis.lpush(
           RESULTS_KEY,
           JSON.stringify({
@@ -113,19 +132,25 @@ end
           })
         );
 
+        // Enqueue discovered links at depth+1, **atomically skipping duplicates** via SEEN_KEY
         const nextDepth = task.depth + 1;
         if (nextDepth <= MAX_DEPTH) {
           for (const a of anchors as string[]) {
             try {
               const abs = new URL(a, url).toString();
               const cu = canon(abs).split("#")[0];
-              await redis.rpush(
+              const payload = JSON.stringify({
+                url: cu,
+                depth: nextDepth,
+                origin: task.origin,
+              });
+              await redis.evalsha(
+                String(enqIfNewSha),
+                2,
+                SEEN_KEY,
                 QUEUE_KEY,
-                JSON.stringify({
-                  url: cu,
-                  depth: nextDepth,
-                  origin: task.origin,
-                })
+                payload,
+                cu
               );
             } catch {}
           }
