@@ -10,6 +10,6 @@ spec:
       containers:
         - name: seeder
           image: your-registry/crawler-cluster:latest
-          command: ["node", "dist/seeder.js"]
+          command: ["node","dist/src/seeder.js"]
           envFrom:
             - configMapRef: { name: crawler-config }

@@ -14,7 +14,7 @@ spec:
         - name: worker
           image: your-registry/crawler-cluster:latest
           imagePullPolicy: IfNotPresent
-          command: ["node", "dist/worker.js"]
+          command: ["node","dist/src/worker.js"]
           envFrom:
             - configMapRef: { name: crawler-config }
           resources:

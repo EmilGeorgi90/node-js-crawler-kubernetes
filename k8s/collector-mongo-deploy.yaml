@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crawler-collector-mongo
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: crawler-collector-mongo }
+  template:
+    metadata:
+      labels: { app: crawler-collector-mongo }
+    spec:
+      containers:
+        - name: collector-mongo
+          image: your-registry/crawler-cluster:latest
+          command: ["node","dist/src/collector-mongo.js"]
+          envFrom:
+            - configMapRef: { name: crawler-config }
+          resources:
+            requests: { cpu: "50m", memory: "64Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }

@@ -1,27 +1,58 @@
 version: "3.9"
+
 services:
   redis:
     image: redis:7-alpine
-    command: ["--appendonly", "yes"]
     ports:
       - "6379:6379"
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+
   worker:
-    image: nest-crawler/crawler-cluster:latest
-    depends_on: [redis]
+    build: .
     environment:
       REDIS_URL: redis://redis:6379
-      SELECTOR: body
+      RESULTS_DB_KEY: crawl:results_db
+      RESULTS_RAW_KEY: crawl:results_raw
+      # Collect only from these selectors (but still follow all anchors)
+      INCLUDE_SELECTORS: ".product-title,.product-price,.description,.specs,.css-ft3rq2"
+      # Crawl settings
       MAX_DEPTH: "3"
       PER_HOST: "6"
       HEADLESS: "true"
-    command: ["node", "dist/worker.js"]
-    scale: 4  # docker compose v2 supports `--scale`; alternatively start multiple worker services
-  collector:
-    image: nest-crawler/crawler-cluster:latest
-    depends_on: [redis]
+    depends_on:
+      - redis
+    command: ["node", "dist/src/worker.js"]
+    # scale with: docker compose up -d --build --scale worker=4
+
+  collector_mongo:
+    build: .
     environment:
       REDIS_URL: redis://redis:6379
-      OUT_PATH: /data/out.jsonl
-    command: ["node", "dist/collector.js"]
+      RESULTS_DB_KEY: crawl:results_db
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: crawler
+      COL_PAGES: pages
+      COL_PRODUCTS: products
+      # Detect product pages by URL pattern .../<slug>/<productId>?
+      PRODUCT_URL_REGEX: "/[^/]+/(\\d+)(?:\\?.*)?$"
+    depends_on:
+      - redis
+      - mongo
+    command: ["node", "dist/src/collector-mongo.js"]
+
+  collector_s3:
+    build: .
+    environment:
+      REDIS_URL: redis://redis:6379
+      RESULTS_RAW_KEY: crawl:results_raw
+      # Write locally; switch to S3 by setting S3_BUCKET and AWS creds
+      S3_DIR: /data/lake
     volumes:
       - ./data:/data
+    depends_on:
+      - redis
+    command: ["node", "dist/src/collector-s3.js"]

@@ -6,10 +6,10 @@ export const canon = (url: string) => {
   try {
     return normalizeUrl(url, {
       stripHash: true,
-      stripWWW: true,
+      stripWWW: false,
       removeQueryParameters: [/^utm_\w+/i, "fbclid", "gclid"],
       sortQueryParameters: true,
-      removeTrailingSlash: true,
+      removeTrailingSlash: false,
     });
   } catch {
     return url;
@@ -54,6 +54,7 @@ export const isContextLoss = (e: any) =>
   /Execution context was destroyed|Cannot find (?:execution )?context with specified id/i.test(
     String(e?.message || e || "")
   );
+
 export const withDomRetry = async <T>(
   fn: () => Promise<T>,
   retries = 2
@@ -69,22 +70,31 @@ export const withDomRetry = async <T>(
   throw new Error("withDomRetry failed");
 };
 
-export const parseContainer = (selector: string) => (sel: string) => sel; // placeholder for DI
+// Selective content extraction (allow-listed selectors), while collecting anchors from the whole document
+export const extractSelective = async (
+  page: Page,
+  includeSelectorsCSV: string
+) => {
+  const include = includeSelectorsCSV
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
-export const extractAll = async (page: Page, selector: string) => {
   return await withDomRetry(() =>
-    page.evaluate((sel: string) => {
-      const container =
-        (document.querySelector(sel) as HTMLElement) ||
-        (document.body as HTMLElement);
-      const a = new Set<string>();
-      container.querySelectorAll("a[href]").forEach((link) => {
-        try {
-          a.add(
-            new URL((link as HTMLAnchorElement).href, location.href).toString()
-          );
-        } catch {}
-      });
+    page.evaluate((selectors: string[]) => {
+      const anchors = Array.from(document.querySelectorAll("a[href]"))
+        .map((a) => {
+          try {
+            return new URL(
+              (a as HTMLAnchorElement).href,
+              location.href
+            ).toString();
+          } catch {
+            return null as any;
+          }
+        })
+        .filter(Boolean) as string[];
+
       function parse(node: any): any {
         if (["STYLE", "SCRIPT", "IFRAME", "NOSCRIPT"].includes(node.tagName))
           return null;
@@ -111,14 +121,20 @@ export const extractAll = async (page: Page, selector: string) => {
         }
         return children.length ? { ...element, children } : null;
       }
-      const parsed = container ? parse(container) : null;
+
+      const blocks = selectors.length
+        ? selectors.flatMap((sel) => Array.from(document.querySelectorAll(sel)))
+        : [document.body];
+      const uniqueBlocks = Array.from(new Set(blocks));
+      const parsedBlocks = uniqueBlocks.map((el) => parse(el)).filter(Boolean);
+
       return {
-        anchors: Array.from(a),
+        anchors,
         title: document.title || null,
-        html: container ? container.innerHTML : "",
-        parsed,
+        body: parsedBlocks.length ? { children: parsedBlocks } : null,
+        html: "",
       };
-    }, selector)
+    }, include)
   );
 };
 
@@ -142,7 +158,7 @@ export const allowedByRobotsFactory = () => {
   };
 };
 
-export const launchBrowser = async (headless: boolean | true) => {
+export const launchBrowser = async (headless: boolean) => {
   const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
   const browser = await puppeteer.launch({
     headless,

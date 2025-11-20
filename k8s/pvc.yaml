@@ -3,7 +3,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: crawler-out
 spec:
-  accessModes: [ "ReadWriteOnce" ]
+  accessModes: ["ReadWriteOnce"]
   resources:
     requests:
-      storage: 1Gi
+    storage: 1Gi

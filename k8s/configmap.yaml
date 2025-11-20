@@ -5,16 +5,20 @@ metadata:
 data:
   REDIS_URL: redis://redis:6379
   QUEUE_KEY: crawl:queue
-  RESULTS_KEY: crawl:results
+  RESULTS_DB_KEY: crawl:results_db
+  RESULTS_RAW_KEY: crawl:results_raw
   VISITED_KEY: crawl:visited
-  HOST_SEM_PREFIX: crawl:host:
-  SELECTOR: body
+  SEEN_KEY: crawl:seen
+  HOST_SEM_PREFIX: crawl:host
+  INCLUDE_SELECTORS: ".product-title,.product-price,.description,.specs"
   MAX_DEPTH: "3"
   PER_HOST: "6"
   HEADLESS: "true"
-  # Optional cookie for consent on dev
+  # Optional cookie
   # COOKIE_URL: https://devlauritz.com
   # COOKIE_NAME: CookieConsent
   # COOKIE_VALUE: <value>
+  # Product URL pattern (slug/id)
+  PRODUCT_URL_REGEX: "/[^/]+/(\\d+)(?:\\?.*)?$"
   # Seed URL (used by seeder job)
   SEED_URL: https://www.lauritz.com/da/auctions

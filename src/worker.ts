@@ -3,7 +3,7 @@ import {
   allowedByRobotsFactory,
   canon,
   configurePage,
-  extractAll,
+  extractSelective,
   launchBrowser,
   navigateStable,
   seedCookie,
@@ -11,15 +11,17 @@ import {
 
 const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
 const QUEUE_KEY = process.env.QUEUE_KEY || "crawl:queue";
-const RESULTS_KEY = process.env.RESULTS_KEY || "crawl:results";
+const RESULTS_DB_KEY = process.env.RESULTS_DB_KEY || "crawl:results_db";
+const RESULTS_RAW_KEY = process.env.RESULTS_RAW_KEY || "crawl:results_raw";
 const VISITED_KEY = process.env.VISITED_KEY || "crawl:visited";
-const SEEN_KEY = process.env.SEEN_KEY || "crawl:seen"; // NEW: gate to avoid enqueueing duplicates
+const SEEN_KEY = process.env.SEEN_KEY || "crawl:seen";
 const HOST_SEM_PREFIX = process.env.HOST_SEM_PREFIX || "crawl:host:"; // + origin + ':inflight'
 
 const SELECTOR = process.env.SELECTOR || "body";
+const INCLUDE_SELECTORS = (process.env.INCLUDE_SELECTORS || "").trim();
 const MAX_DEPTH = Number(process.env.MAX_DEPTH || "3");
 const PER_HOST = Number(process.env.PER_HOST || "6");
-const HEADLESS: boolean | true = ((): any => {
+const HEADLESS: boolean = ((): any => {
   const v = (process.env.HEADLESS || "true").toLowerCase();
   return v === "true";
 })();
@@ -28,30 +30,24 @@ const COOKIE_URL = process.env.COOKIE_URL; // optional
 const COOKIE_NAME = process.env.COOKIE_NAME; // optional
 const COOKIE_VALUE = process.env.COOKIE_VALUE; // optional
 
-// Per-host semaphore (limit in-flight per origin)
+const PRODUCT_URL_REGEX = new RegExp(
+  process.env.PRODUCT_URL_REGEX ?? String.raw`\/[^\/]+\/(\d+)(?:\?.*)?$`,
+  "i"
+);
+
 const luaTryAcquire = `
 local key = KEYS[1]
 local limit = tonumber(ARGV[1])
 local v = tonumber(redis.call('GET', key) or '0')
-if v < limit then
-  redis.call('INCR', key)
-  return 1
-else
-  return 0
-end
+if v < limit then redis.call('INCR', key) return 1 else return 0 end
 `;
 
-// NEW: Enqueue only if URL hasn't been seen before (atomic SADD+RPUSH)
 const luaEnqueueIfNew = `
 local seen = KEYS[1]
 local q = KEYS[2]
 local task = ARGV[1]
 local url = ARGV[2]
-if redis.call('SADD', seen, url) == 1 then
-  return redis.call('RPUSH', q, task)
-else
-  return 0
-end
+if redis.call('SADD', seen, url) == 1 then return redis.call('RPUSH', q, task) else return 0 end
 `;
 
 (async () => {
@@ -73,9 +69,8 @@ end
   };
 
   while (true) {
-    // BRPOP returns [key, value]
     const res = await redis.brpop(QUEUE_KEY, 5);
-    if (!res) continue; // timeout, loop
+    if (!res) continue;
     const task = JSON.parse(res[1]) as {
       url: string;
       depth: number;
@@ -86,16 +81,11 @@ end
       if (task.depth > MAX_DEPTH) continue;
       const url = canon(task.url);
       const origin = new URL(url).origin;
-      if (origin !== task.origin) continue; // same-origin policy here
+      if (origin !== task.origin) continue;
 
-      // Mark as visited when we start processing (for metrics)
       const added = await redis.sadd(VISITED_KEY, url);
-      if (added === 0) {
-        // Already processing/processed; skip (queue was deduped by SEEN, but keep safe)
-        continue;
-      }
+      if (added === 0) continue;
 
-      // Per-host semaphore acquire
       while (true) {
         const ok = await redis.evalsha(
           String(tryAcquireSha),
@@ -117,29 +107,38 @@ end
         }
         await navigateStable(page, url);
 
-        const { anchors, title, html, parsed } = await extractAll(
+        const { anchors, title, body, html } = await extractSelective(
           page,
-          SELECTOR
-        );
-        // Publish result
-        await redis.lpush(
-          RESULTS_KEY,
-          JSON.stringify({
-            sitesUrl: url,
-            title,
-            body: parsed ? { children: [parsed] } : undefined,
-            html,
-          })
+          INCLUDE_SELECTORS || SELECTOR
         );
 
-        // Enqueue discovered links at depth+1, **atomically skipping duplicates** via SEEN_KEY
+        const m = PRODUCT_URL_REGEX.exec(url);
+        const isProduct = !!m;
+        const productId = m?.[1] ?? null;
+        const meta = {
+          fetchedAt: new Date().toISOString(),
+          domain: new URL(url).hostname,
+          isProduct,
+          productId,
+        };
+
+        const payload = {
+          sitesUrl: url,
+          title,
+          body: body || undefined,
+          html: html || "",
+          meta,
+        };
+        await redis.lpush(RESULTS_DB_KEY, JSON.stringify(payload));
+        await redis.lpush(RESULTS_RAW_KEY, JSON.stringify(payload));
+
         const nextDepth = task.depth + 1;
         if (nextDepth <= MAX_DEPTH) {
           for (const a of anchors as string[]) {
             try {
               const abs = new URL(a, url).toString();
               const cu = canon(abs).split("#")[0];
-              const payload = JSON.stringify({
+              const t = JSON.stringify({
                 url: cu,
                 depth: nextDepth,
                 origin: task.origin,
@@ -149,7 +148,7 @@ end
                 2,
                 SEEN_KEY,
                 QUEUE_KEY,
-                payload,
+                t,
                 cu
               );
             } catch {}
@@ -160,7 +159,7 @@ end
         await release(origin);
       }
     } catch (e) {
-      // swallow and continue
+      // swallow
     }
   }
 })();

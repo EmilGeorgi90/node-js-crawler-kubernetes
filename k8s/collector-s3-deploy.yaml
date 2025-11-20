@@ -1,19 +1,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: crawler-collector
+  name: crawler-collector-s3
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: crawler-collector }
+    matchLabels: { app: crawler-collector-s3 }
   template:
     metadata:
-      labels: { app: crawler-collector }
+      labels: { app: crawler-collector-s3 }
     spec:
       containers:
-        - name: collector
+        - name: collector-s3
           image: your-registry/crawler-cluster:latest
-          command: ["node", "dist/src/collector.js"]
+          command: ["node","dist/src/collector-s3.js"]
           envFrom:
             - configMapRef: { name: crawler-config }
           volumeMounts:
@@ -21,7 +21,7 @@ spec:
               mountPath: /data
           resources:
             requests: { cpu: "50m", memory: "64Mi" }
-            limits:   { cpu: "500m", memory: "512Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
       volumes:
         - name: out
           persistentVolumeClaim: { claimName: crawler-out }
