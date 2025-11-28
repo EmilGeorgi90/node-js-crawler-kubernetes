@@ -1,0 +1,36 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: 'worker'
+    static_configs:
+      - targets: ['worker:9100']   # worker metrics endpoint
+
+  - job_name: 'collector_mongo'
+    static_configs:
+      - targets: ['collector_mongo:9101']   
+  
+  - job_name: 'ai_enricher'
+    static_configs:
+      - targets: ['ai_enricher:9102']   
+  
+  - job_name: 'collector_embed'
+    static_configs:
+      - targets: ['collector_embed:9103'] 
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis_exporter:9121']
+
+  - job_name: 'mongo'
+    static_configs:
+      - targets: ['mongodb_exporter:9216']
+
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres_exporter:9187']
+
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']

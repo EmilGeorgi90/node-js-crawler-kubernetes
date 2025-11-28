@@ -1,6 +1,7 @@
 version: "3.9"
 
 services:
+  # ---------- Core infra ----------
   redis:
     image: redis:7-alpine
     ports:
@@ -11,22 +12,91 @@ services:
     ports:
       - "27017:27017"
 
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: vector
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+
+  # ---------- GUI tools ----------
+  pgadmin:
+    image: dpage/pgadmin4:8
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+
+  mongo_express:
+    image: mongo-express:1
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongo
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin123
+    ports:
+      - "8081:8081"
+    depends_on:
+      - mongo
+
+  redisinsight:
+    image: redis/redisinsight:latest
+    ports:
+      - "5540:5540"
+    depends_on:
+      - redis
+
+  # ---------- Embeddings (local) ----------
+  embedder:
+    build:
+      context: ./embeddings
+    ports:
+      - "8000:8000"
+
+  # ---------- AI Detector ----------
+  ai-detector:
+    build:
+      context: ./ai
+    environment:
+      LR_WEIGHTS: /models/lr.json
+    volumes:
+      - ./ai/models:/models
+    ports:
+      - "8001:8001"
+
+  # ---------- App workers & collectors ----------
   worker:
     build: .
     environment:
       REDIS_URL: redis://redis:6379
+      QUEUE_KEY: crawl:queue
+      REVISIT_KEY: ai:revisit
       RESULTS_DB_KEY: crawl:results_db
       RESULTS_RAW_KEY: crawl:results_raw
-      # Collect only from these selectors (but still follow all anchors)
-      INCLUDE_SELECTORS: ".product-title,.product-price,.description,.specs,.css-ft3rq2"
-      # Crawl settings
+      SEEN_KEY: crawl:seen
+
       MAX_DEPTH: "3"
       PER_HOST: "6"
       HEADLESS: "true"
+
+      # Leave empty to prefer AI revisit flow for text extraction
+      INCLUDE_SELECTORS: ".product-title,.product-price,.description,.specs,.css-ft3rq2"
+
+      AI_MODE: "true"
+      # Optional consent cookie
+      # COOKIE_URL: https://www.lauritz.com
+      # COOKIE_NAME: CookieConsent
+      # COOKIE_VALUE: <value>
+      # COOKIE_DOMAIN: .lauritz.com
+      # COOKIE_PATH: /
     depends_on:
       - redis
-    command: ["node", "dist/src/worker.js"]
-    # scale with: docker compose up -d --build --scale worker=4
+    command: ["node","dist/src/worker.js"]
 
   collector_mongo:
     build: .
@@ -37,22 +107,121 @@ services:
       DB_NAME: crawler
       COL_PAGES: pages
       COL_PRODUCTS: products
-      # Detect product pages by URL pattern .../<slug>/<productId>?
       PRODUCT_URL_REGEX: "/[^/]+/(\\d+)(?:\\?.*)?$"
     depends_on:
       - redis
       - mongo
-    command: ["node", "dist/src/collector-mongo.js"]
+    command: ["node","dist/src/collector-mongo.js"]
 
   collector_s3:
     build: .
     environment:
       REDIS_URL: redis://redis:6379
       RESULTS_RAW_KEY: crawl:results_raw
-      # Write locally; switch to S3 by setting S3_BUCKET and AWS creds
       S3_DIR: /data/lake
     volumes:
       - ./data:/data
     depends_on:
       - redis
-    command: ["node", "dist/src/collector-s3.js"]
+    command: ["node","dist/src/collector-s3.js"]
+
+  collector_embed:
+    build: .
+    environment:
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: crawler
+      COL_PAGES: pages
+
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_DB: vector
+      PG_USER: postgres
+      PG_PASS: postgres
+
+      EMBEDDER_URL: http://embedder:8000/embed
+      VECTOR_DIM: "384"
+      EMBED_BATCH: "32"
+      INLINE_VECTOR_SQL: "true"
+    depends_on:
+      - mongo
+      - postgres
+      - embedder
+    command: ["node","dist/src/collector-embed.js"]
+
+  ai_enricher:
+    build: .
+    environment:
+      REDIS_URL: redis://redis:6379
+      AI_URL: http://ai-detector:8001/detect
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: crawler
+      COL_PAGES: pages
+      REVISIT_KEY: ai:revisit
+      MIN_CONF: "0.65"
+      INCLUDE_SELECTORS: ""
+      ENABLE_REVISIT: "true"
+    depends_on:
+      - mongo
+      - ai-detector
+      - redis
+    command: ["node","dist/src/ai-enricher.js"]
+  redis_exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    command: ["--redis.addr=redis://redis:6379"]
+    ports:
+      - "9121:9121"
+    depends_on:
+      - redis
+
+  mongodb_exporter:
+    image: percona/mongodb_exporter:0.40.0
+    environment:
+      MONGODB_URI: "mongodb://mongo:27017"
+    ports:
+      - "9216:9216"
+    depends_on:
+      - mongo
+
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres:5432/vector?sslmode=disable"
+    ports:
+      - "9187:9187"
+    depends_on:
+      - postgres
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - worker
+      - redis_exporter
+      - mongodb_exporter
+      - postgres_exporter
+      - cadvisor
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus

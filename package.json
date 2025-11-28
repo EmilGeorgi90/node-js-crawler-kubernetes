@@ -1,6 +1,6 @@
 {
   "name": "crawler-cluster",
-  "version": "1.0.0",
+  "private": true,
   "type": "commonjs",
   "scripts": {
     "build": "tsc -p .",
@@ -8,19 +8,22 @@
     "worker": "node dist/src/worker.js",
     "collect:mongo": "node dist/src/collector-mongo.js",
     "collect:s3": "node dist/src/collector-s3.js",
-    "cli": "node dist/tools/crawler-cli.js",
-    "cli:frontier": "node dist/tools/crawler-cli-shared-frontier.js"
+    "collect:embed": "node dist/src/collector-embed.js",
+    "ai:enricher": "node dist/src/ai-enricher.js"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.670.0",
+    "@aws-sdk/client-s3": "^3.939.0",
     "ioredis": "^5.4.1",
-    "mongodb": "^6.11.0",
+    "mongodb": "^6.9.0",
     "normalize-url": "^8.0.2",
-    "pg": "^8.16.3",
+    "p-limit": "^6.2.0",
+    "pg": "^8.12.0",
+    "prom-client": "^15.1.3",
     "puppeteer": "^24.10.2",
     "robots-parser": "^3.0.1"
   },
   "devDependencies": {
+    "@types/ioredis": "^5.0.0",
     "@types/node": "^22.10.7",
     "@types/pg": "^8.15.6",
     "typescript": "^5.7.3"

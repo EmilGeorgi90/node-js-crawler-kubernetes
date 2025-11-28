@@ -1,0 +1,41 @@
+{
+  "annotations":{"list":[]},
+  "editable":true,
+  "fiscalYearStartMonth":0,
+  "graphTooltip":0,
+  "panels":[
+    {
+      "type":"stat",
+      "title":"Pages processed / 5m",
+      "targets":[{"expr":"sum(increase(crawler_pages_processed_total[5m]))","refId":"A"}],
+      "gridPos":{"h":6,"w":8,"x":0,"y":0}
+    },
+    {
+      "type":"stat",
+      "title":"Pages failed / 5m",
+      "targets":[{"expr":"sum(increase(crawler_pages_failed_total[5m]))","refId":"A"}],
+      "gridPos":{"h":6,"w":8,"x":8,"y":0}
+    },
+    {
+      "type":"graph",
+      "title":"Queue depth",
+      "targets":[{"expr":"crawler_queue_depth","legendFormat":"{{queue}}","refId":"A"}],
+      "gridPos":{"h":8,"w":16,"x":0,"y":6}
+    },
+    {
+      "type":"graph",
+      "title":"Links enqueued / s",
+      "targets":[{"expr":"rate(crawler_links_enqueued_total[1m])","refId":"A"}],
+      "gridPos":{"h":8,"w":16,"x":0,"y":14}
+    }
+  ],
+  "schemaVersion":39,
+  "style":"dark",
+  "tags":["crawler"],
+  "templating":{"list":[]},
+  "time":{"from":"now-6h","to":"now"},
+  "timezone":"",
+  "title":"Crawler Overview",
+  "version":1,
+  "weekStart":""
+}

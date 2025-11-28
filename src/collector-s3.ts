@@ -3,13 +3,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import Redis from "ioredis";
 
-const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
+const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
 const RESULTS_KEY = process.env.RESULTS_RAW_KEY || "crawl:results_raw";
 
 const S3_BUCKET = process.env.S3_BUCKET;
 const S3_PREFIX = process.env.S3_PREFIX || "lake";
 const S3_REGION = process.env.AWS_REGION || "eu-west-1";
-const S3_DIR = process.env.S3_DIR; // e.g., "./lake" to write locally
+const S3_DIR = process.env.S3_DIR;
 
 const s3 = S3_BUCKET ? new S3Client({ region: S3_REGION }) : null;
 
@@ -25,6 +25,7 @@ const keyFor = (url: string, fetchedAt?: string) => {
 
 (async () => {
   const redis = new Redis(REDIS_URL);
+  console.log("collector-s3 up (local dir if S3 not configured)");
   while (true) {
     const res = await redis.brpop(RESULTS_KEY, 5);
     if (!res) continue;
@@ -41,12 +42,9 @@ const keyFor = (url: string, fetchedAt?: string) => {
           ContentType: "application/x-ndjson",
         })
       );
-    } else if (S3_DIR) {
-      const full = path.join(S3_DIR, key);
-      fs.mkdirSync(path.dirname(full), { recursive: true });
-      fs.appendFileSync(full, json + "\n");
     } else {
-      const full = path.join("./lake", key);
+      const root = S3_DIR || "./lake";
+      const full = path.join(root, key);
       fs.mkdirSync(path.dirname(full), { recursive: true });
       fs.appendFileSync(full, json + "\n");
     }
