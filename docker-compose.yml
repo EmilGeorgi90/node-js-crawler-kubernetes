@@ -1,80 +1,149 @@
-version: "3.9"
+# docker-compose.yml
 
 services:
-  # --- Core stores ---
+  # ---------------- Infra ----------------
   redis:
     image: redis:7-alpine
+    container_name: redis
     ports: ["6379:6379"]
+
+  redis_exporter:
+    image: oliver006/redis_exporter:v1.62.0
+    container_name: redis_exporter
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    depends_on: [redis]
+    ports: ["9121:9121"] # optional for host curl
 
   mongo:
     image: mongo:7
+    container_name: mongo
     ports: ["27017:27017"]
     volumes:
       - mongo_data:/data/db
 
-  postgres:
-    image: ankane/pgvector:latest
+  mongodb_exporter:
+    image: bitnami/mongodb-exporter
+    container_name: mongodb_exporter
     environment:
+      MONGODB_URI: mongodb://mongo:27017
+    depends_on: [mongo]
+    ports: ["9216:9216"] # optional
+
+  postgres:
+    image: ankane/pgvector:v0.5.1
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: vector
     ports: ["5432:5432"]
     volumes:
       - pg_data:/var/lib/postgresql/data
 
-  # --- Admin GUIs ---
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: postgres_exporter
+    environment:
+      # format: postgresql://user:pass@host:port/dbname?sslmode=disable
+      DATA_SOURCE_NAME: postgresql://postgres:postgres@postgres:5432/vector?sslmode=disable
+    depends_on: [postgres]
+    ports: ["9187:9187"] # optional
+
+  # ---------------- Dashboards ----------------
   redisinsight:
     image: redislabs/redisinsight:latest
+    container_name: redisinsight
     ports: ["5540:5540"]
-    depends_on: [redis]
-    environment:
-      RI_ALLOW_ERRORS: "true"
 
-  mongo-express:
-    image: mongo-express:1.0.2
+  mongo_express:
+    image: mongo-express:1.0.2-20
+    container_name: mongo_express
     environment:
       ME_CONFIG_MONGODB_SERVER: mongo
       ME_CONFIG_BASICAUTH_USERNAME: admin
       ME_CONFIG_BASICAUTH_PASSWORD: admin123
-    ports: ["8081:8081"]
     depends_on: [mongo]
+    ports: ["8081:8081"]
 
-  # --- AI services ---
-  ai:
-    build: ./ai
-    ports: ["8001:8001"]
-
-  embeddings:
-    build: ./embeddings
+  pgadmin:
+    image: dpage/pgadmin4:8.12
+    container_name: pgadmin
     environment:
-      VECTOR_DIM: "384"
-    ports: ["8002:8002"]
+      PGADMIN_DEFAULT_EMAIL: admin@local
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    depends_on: [postgres]
+    ports: ["5050:80"]
 
-  # --- App images (built from repo root Dockerfile; outputs dist/src/*.js) ---
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: prometheus
+    ports: ["9090:9090"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - worker         # scrape custom app metrics
+      - redis_exporter
+      - mongodb_exporter
+      - postgres_exporter
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    container_name: grafana
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+    # Optional: auto-provision Prometheus DS if you add the file locally
+    # volumes:
+    #   - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on: [prometheus]
+
+  # ---------------- App: PROD (dist) ----------------
   worker:
-    build: .
+    build:
+      context: .
+      target: prod
+    image: crawler-cluster:prod
+    container_name: worker
     environment:
       REDIS_URL: redis://redis:6379
       RESULTS_DB_KEY: crawl:results_db
       RESULTS_RAW_KEY: crawl:results_raw
       HEADLESS: "true"
-      MAX_DEPTH: "3"
-      AI_MODE: "true" # true = AI extract; false + INCLUDE_SELECTORS to use CSS mode
-      INCLUDE_SELECTORS: "" # e.g. ".product-title,.product-body"
+      STATIC_FIRST: "true"
+      FRONTIER_MODE: "stream"
       METRICS_PORT: "9100"
-      REVISIT_KEY: ai:revisit
-      REVISIT_PENDING_KEY: ai:revisit:pending
-      SEEN_KEY: crawl:seen
-      # Optional cookie (uncomment & set if needed)
-      # COOKIE_URL: "https://www.lauritz.com"
-      # COOKIE_NAME: "CookieConsent"
-      # COOKIE_VALUE: "<cookie value>"
-      # COOKIE_DOMAIN: ".lauritz.com"
-      # COOKIE_PATH: "/"
+      # AI_MODE: "false"
+      # INCLUDE_SELECTORS: "body,.main"   # set if you want CSS-only collection
+      PUPPETEER_SKIP_DOWNLOAD: "true"
+      PUPPETEER_EXECUTABLE_PATH: "/usr/bin/chromium"
     depends_on: [redis]
-    command: ["node", "dist/src/worker.js"]
+    shm_size: "1gb"
+    command: ["node","dist/src/worker.js"]
+    ports: ["9100:9100"]  # optional for host curl
+
+  ai_enricher:
+    build:
+      context: .
+      target: prod
+    image: crawler-ai:prod
+    container_name: ai_enricher
+    environment:
+      REDIS_URL: redis://redis:6379
+      MONGO_URL: mongodb://mongo:27017
+      DB_NAME: crawler
+      METRICS_PORT: "9102"
+    depends_on: [redis, mongo]
+    command: ["node","dist/src/ai-enricher.js"]
+    ports: ["9102:9102"]  # optional
 
   collector_mongo:
-    build: .
+    build:
+      context: .
+      target: prod
+    image: crawler-collector-mongo:prod
+    container_name: collector_mongo
     environment:
       REDIS_URL: redis://redis:6379
       RESULTS_DB_KEY: crawl:results_db
@@ -82,110 +151,112 @@ services:
       DB_NAME: crawler
       COL_PAGES: pages
       COL_PRODUCTS: products
-      PRODUCT_URL_REGEX: "/[^/]+/(\\d+)(?:\\?.*)?$"
+      PRODUCT_URL_REGEX: '/[^/]+/(\\d+)(?:\\?.*)?$'
       METRICS_PORT: "9101"
     depends_on: [redis, mongo]
-    command: ["node", "dist/src/collector-mongo.js"]
+    command: ["node","dist/src/collector-mongo.js"]
+    ports: ["9101:9101"]  # optional
 
   collector_s3:
-    build: .
+    build:
+      context: .
+      target: prod
+    image: crawler-collector-s3:prod
+    container_name: collector_s3
     environment:
       REDIS_URL: redis://redis:6379
       RESULTS_RAW_KEY: crawl:results_raw
-      S3_DIR: /data/lake # write locally under ./data/lake
-      METRICS_PORT: "9104"
+      S3_DIR: /data/lake        # local lake path inside container
+      METRICS_PORT: "9103"
     volumes:
-      - ./data:/data
+      - ./data:/data            # maps ./data to /data
     depends_on: [redis]
-    command: ["node", "dist/src/collector-s3.js"]
+    command: ["node","dist/src/collector-s3.js"]
+    ports: ["9103:9103"]  # optional
 
-  ai_enricher:
-    build: .
+  # ---------------- App: DEV (raw .ts via tsx) ----------------
+  worker_dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      target: dev
+    image: crawler-cluster:dev
+    container_name: worker_dev
+    environment:
+      REDIS_URL: redis://redis:6379
+      RESULTS_DB_KEY: crawl:results_db
+      RESULTS_RAW_KEY: crawl:results_raw
+      HEADLESS: "true"
+      STATIC_FIRST: "true"
+      FRONTIER_MODE: "stream"
+      METRICS_PORT: "9100"
+      PUPPETEER_SKIP_DOWNLOAD: "true"
+      PUPPETEER_EXECUTABLE_PATH: "/usr/bin/chromium"
+    depends_on: [redis]
+    shm_size: "1gb"
+    command: ["pnpm","exec","tsx","src/worker.ts"]
+    volumes:
+      - .:/app
+    ports: ["9100:9100"]
+
+  ai_enricher_dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      target: dev
+    image: crawler-ai:dev
+    container_name: ai_enricher_dev
     environment:
       REDIS_URL: redis://redis:6379
       MONGO_URL: mongodb://mongo:27017
       DB_NAME: crawler
-      COL_PAGES: pages
-      REVISIT_KEY: ai:revisit
-      REVISIT_PENDING_KEY: ai:revisit:pending
-      SEEN_KEY: crawl:seen
-      INCLUDE_SELECTORS: "" # if non-empty, revisits are optional
-      ENABLE_REVISIT: "true"
-      AI_URL: http://ai:8001/detect
-      AI_BATCH: "12"
-      AI_TIMEOUT_MS: "15000"
-      AI_TEXT_LIMIT: "4000"
-      MIN_CONF: "0.65"
       METRICS_PORT: "9102"
-    depends_on: [mongo, ai, redis]
-    command: ["node", "dist/src/ai-enricher.js"]
+    depends_on: [redis, mongo]
+    command: ["pnpm","exec","tsx","src/ai-enricher.ts"]
+    volumes:
+      - .:/app
+    ports: ["9102:9102"]
 
-  collector_embed:
-    build: .
+  collector_mongo_dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      target: dev
+    image: crawler-collector-mongo:dev
+    container_name: collector_mongo_dev
     environment:
+      REDIS_URL: redis://redis:6379
+      RESULTS_DB_KEY: crawl:results_db
       MONGO_URL: mongodb://mongo:27017
       DB_NAME: crawler
       COL_PAGES: pages
-      PG_HOST: postgres
-      PG_PORT: "5432"
-      PG_DB: vector
-      PG_USER: postgres
-      PG_PASS: postgres
-      EMBEDDER_URL: http://embeddings:8002/embed
-      EMBED_BATCH: "24"
-      VECTOR_DIM: "384"
-      INLINE_VECTOR_SQL: "true"
+      COL_PRODUCTS: products
+      PRODUCT_URL_REGEX: '/[^/]+/(\\d+)(?:\\?.*)?$'
+      METRICS_PORT: "9101"
+    depends_on: [redis, mongo]
+    command: ["pnpm","exec","tsx","src/collector-mongo.ts"]
+    volumes:
+      - .:/app
+    ports: ["9101:9101"]
+
+  collector_s3_dev:
+    profiles: ["dev"]
+    build:
+      context: .
+      target: dev
+    image: crawler-collector-s3:dev
+    container_name: collector_s3_dev
+    environment:
+      REDIS_URL: redis://redis:6379
+      RESULTS_RAW_KEY: crawl:results_raw
+      S3_DIR: /data/lake
       METRICS_PORT: "9103"
-    depends_on: [mongo, postgres, embeddings]
-    command: ["node", "dist/src/collector-embed.js"]
-
-  # --- Monitoring stack ---
-  redis_exporter:
-    image: oliver006/redis_exporter:v1.62.0
-    command: ["--redis.addr=redis://redis:6379"]
-    ports: ["9121:9121"]
+    volumes:
+      - .:/app
+      - ./data:/data
     depends_on: [redis]
-
-  mongodb_exporter:
-    image: percona/mongodb_exporter:0.40.0
-    environment:
-      MONGODB_URI: mongodb://mongo:27017
-    ports: ["9216:9216"]
-    depends_on: [mongo]
-
-  postgres_exporter:
-    image: prometheuscommunity/postgres-exporter:v0.15.0
-    environment:
-      DATA_SOURCE_NAME: postgresql://postgres:postgres@postgres:5432/vector?sslmode=disable
-    ports: ["9187:9187"]
-    depends_on: [postgres]
-
-  cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
-    ports: ["8080:8080"]
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker/:/var/lib/docker:ro
-
-  prometheus:
-    image: prom/prometheus:v2.54.1
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    ports: ["9090:9090"]
-    depends_on:
-      [worker, redis_exporter, mongodb_exporter, postgres_exporter, cadvisor]
-
-  grafana:
-    image: grafana/grafana:11.2.2
-    ports: ["3000:3000"]
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin123
-    volumes:
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
-    depends_on: [prometheus]
+    command: ["pnpm","exec","tsx","src/collector-s3.ts"]
+    ports: ["9103:9103"]
 
 volumes:
   mongo_data:

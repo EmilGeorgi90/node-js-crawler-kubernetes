@@ -2,26 +2,39 @@ import { MongoClient, ServerApiVersion } from "mongodb";
 import { Redis } from "ioredis";
 import http from "node:http";
 import client from "prom-client";
+import { cfg } from "./config.js";
 
 const registry = new client.Registry();
 client.collectDefaultMetrics({ register: registry });
+
 const aiLabeled = new client.Counter({
   name: "ai_enricher_labeled_total",
   help: "Docs labeled",
+  registers: [registry],
 });
 const aiFailed = new client.Counter({
   name: "ai_enricher_requests_failed_total",
   help: "AI request fails",
+  registers: [registry],
 });
 const aiRevisitQueued = new client.Counter({
   name: "ai_enricher_revisit_enqueued_total",
   help: "Revisit tasks queued",
+  registers: [registry],
 });
 const aiLatency = new client.Histogram({
   name: "ai_enricher_infer_duration_seconds",
   help: "AI RTT",
   buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
+  registers: [registry],
 });
+const aiConf = new client.Histogram({
+  name: "ai_enricher_confidence",
+  help: "Model confidence",
+  buckets: [0, 0.2, 0.4, 0.6, 0.7, 0.8, 0.9, 1.0],
+  registers: [registry],
+});
+registry.registerMetric(aiConf);
 
 function startMetricsServer(port = Number(process.env.METRICS_PORT || 9102)) {
   const srv = http.createServer(async (_req, res) => {
@@ -36,21 +49,10 @@ function startMetricsServer(port = Number(process.env.METRICS_PORT || 9102)) {
   srv.listen(port, () => console.log(`[metrics] ai-enricher on :${port}`));
 }
 
-const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
 const AI_URL = process.env.AI_URL || "http://ai:8001/detect";
-const MONGO_URL = process.env.MONGO_URL || "mongodb://mongo:27017";
-const DB_NAME = process.env.DB_NAME || "crawler";
-const COL_PAGES = process.env.COL_PAGES || "pages";
-
-const REVISIT_KEY = process.env.REVISIT_KEY || "ai:revisit";
-const REVISIT_PENDING_KEY =
-  process.env.REVISIT_PENDING_KEY || "ai:revisit:pending";
-const SEEN_KEY = process.env.SEEN_KEY || "crawl:seen";
-
 const INCLUDE_SELECTORS = (process.env.INCLUDE_SELECTORS || "").trim();
 const ENABLE_REVISIT =
   (process.env.ENABLE_REVISIT ?? "true").toLowerCase() !== "false";
-
 const BATCH = Math.max(1, Math.min(16, Number(process.env.AI_BATCH || "12")));
 const MIN_CONF = Number(process.env.MIN_CONF || "0.65");
 const TEXT_LIMIT = Math.max(
@@ -106,15 +108,19 @@ async function postJSON(url: string, body: any) {
 (async () => {
   startMetricsServer();
 
-  const redis = new Redis(REDIS_URL);
-  const mongo = new MongoClient(MONGO_URL, { serverApi: ServerApiVersion.v1 });
+  const redis = new Redis(cfg.REDIS_URL);
+  const mongo = new MongoClient(
+    process.env.MONGO_URL || "mongodb://mongo:27017",
+    { serverApi: ServerApiVersion.v1 }
+  );
   await mongo.connect();
-  const pages = mongo.db(DB_NAME).collection(COL_PAGES);
+  const pages = mongo
+    .db(process.env.DB_NAME || "crawler")
+    .collection(process.env.COL_PAGES || "pages");
   console.log("ai-enricher up (AI_URL=", AI_URL, ")");
 
   while (true) {
     try {
-      // do NOT pull already-queued docs
       const batch = await pages
         .find(
           {
@@ -179,14 +185,16 @@ async function postJSON(url: string, body: any) {
       for (const r of results) {
         if (!r || typeof r.url !== "string") continue;
 
-        // 1) Update labels
+        const conf = Number.isFinite(r.confidence) ? r.confidence : 0;
+        aiConf.observe(conf);
+
         await pages.updateOne(
           { url: r.url },
           {
             $set: {
               "labels.product": {
                 isProduct: !!r.isProduct,
-                confidence: Number.isFinite(r.confidence) ? r.confidence : 0,
+                confidence: conf,
                 fields: r.fields || null,
                 updatedAt: new Date(),
               },
@@ -195,25 +203,28 @@ async function postJSON(url: string, body: any) {
         );
         aiLabeled.inc();
 
-        // 2) One-time enqueue logic (guarded)
-        if (
-          ENABLE_REVISIT &&
-          !INCLUDE_SELECTORS &&
-          Number(r.confidence) >= MIN_CONF
-        ) {
+        if (ENABLE_REVISIT && !INCLUDE_SELECTORS && conf >= MIN_CONF) {
           const [seen, pending] = await Promise.all([
-            redis.sismember(SEEN_KEY, r.url),
-            redis.sismember(REVISIT_PENDING_KEY, r.url),
+            redis.sismember(cfg.SEEN_KEY, r.url),
+            redis.sismember(cfg.REVISIT_PENDING_KEY, r.url),
           ]);
           if (seen === 0 && pending === 0) {
-            const added = await redis.sadd(REVISIT_PENDING_KEY, r.url);
+            const added = await redis.sadd(cfg.REVISIT_PENDING_KEY, r.url);
             if (added === 1) {
-              await redis.rpush(
-                REVISIT_KEY,
-                JSON.stringify({ url: r.url, depth: 0 })
-              );
+              if (cfg.FRONTIER_MODE === "stream") {
+                await redis.xadd(
+                  cfg.REVISIT_STREAM,
+                  "*",
+                  "task",
+                  JSON.stringify({ url: r.url, depth: 0 })
+                );
+              } else {
+                await redis.rpush(
+                  cfg.REVISIT_KEY,
+                  JSON.stringify({ url: r.url, depth: 0 })
+                );
+              }
               aiRevisitQueued.inc();
-              // mark in Mongo so we don't re-enqueue again
               await pages.updateOne(
                 { url: r.url },
                 {
@@ -227,6 +238,7 @@ async function postJSON(url: string, body: any) {
           }
         }
       }
+
       console.log(`AI-labeled: ${results.length}`);
     } catch (e: any) {
       aiFailed.inc();

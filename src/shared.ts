@@ -6,63 +6,36 @@ import puppeteer, {
 } from "puppeteer";
 import { Redis } from "ioredis";
 import normalizeUrl from "normalize-url";
+import { request } from "undici";
+import * as crypto from "node:crypto";
+import { load as cheerioLoad } from "cheerio";
+import robotsParserImport from "robots-parser";
+import { cfg, isTrue } from "./config.js";
 
-// ---------- ENV HELPERS ----------
-export const env = {
-  REDIS_URL: process.env.REDIS_URL || "redis://redis:6379",
-
-  // Browser
-  HEADLESS: (process.env.HEADLESS || "true").toLowerCase() === "true",
-  PUPPETEER_EXECUTABLE_PATH: process.env.PUPPETEER_EXECUTABLE_PATH,
-
-  // Timeouts
-  NAV_TIMEOUT_MS: Number(process.env.NAV_TIMEOUT_MS || "30000"),
-  OP_TIMEOUT_MS: Number(process.env.OP_TIMEOUT_MS || "15000"),
-
-  // Optional consent cookie
-  COOKIE_URL: process.env.COOKIE_URL || "",
-  COOKIE_NAME: process.env.COOKIE_NAME || "",
-  COOKIE_VALUE: process.env.COOKIE_VALUE || "",
-  COOKIE_DOMAIN: process.env.COOKIE_DOMAIN || "",
-  COOKIE_PATH: process.env.COOKIE_PATH || "/",
-
-  // Retries
-  MAX_NAV_RETRIES: Number(process.env.MAX_NAV_RETRIES || "2"),
-};
-
-// ---------- LOGGING ----------
 export function makeLogger(prefix: string) {
   const tag = `[${prefix}]`;
   return {
-    info: (msg: string, ...a: any[]) => console.log(tag, msg, ...a),
-    warn: (msg: string, ...a: any[]) => console.warn(tag, msg, ...a),
-    error: (msg: string, ...a: any[]) => console.error(tag, msg, ...a),
-    debug: (msg: string, ...a: any[]) => {
-      if ((process.env.DEBUG || "").toLowerCase() === "true")
-        console.log(`${tag} [debug]`, msg, ...a);
-    },
+    info: (m: string, ...a: any[]) => console.log(tag, m, ...a),
+    warn: (m: string, ...a: any[]) => console.warn(tag, m, ...a),
+    error: (m: string, ...a: any[]) => console.error(tag, m, ...a),
   };
 }
 
-// ---------- REDIS ----------
-export function createRedis(url = env.REDIS_URL) {
+export function createRedis(url = cfg.REDIS_URL) {
   return new Redis(url);
 }
-
-// ---------- SLEEP ----------
 export function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// ---------- URL UTILS ----------
-export function canonUrl(url: string): string {
+export function canon(url: string) {
   try {
     return normalizeUrl(url, {
       stripHash: true,
       stripWWW: false,
-      removeTrailingSlash: false,
-      sortQueryParameters: true,
       removeQueryParameters: [/^utm_\w+/i, "fbclid", "gclid"],
+      sortQueryParameters: true,
+      removeTrailingSlash: false,
     });
   } catch {
     return url;
@@ -76,21 +49,118 @@ export function sameOriginOnly(links: string[], pageUrl: string) {
     try {
       const abs = new URL(href, pageUrl).toString();
       if (new URL(abs).origin === origin) out.add(abs.split("#")[0]);
-    } catch {
-      /* ignore */
-    }
+    } catch {}
   }
   return Array.from(out);
 }
 
 export function csvToSelectors(csv: string): string[] {
-  return csv
+  return (csv || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
 }
 
-// ---------- BROWSER LAUNCH ----------
+export type ExtractResult = {
+  title: string | null;
+  body: any;
+  html: string;
+  text: string;
+  anchors: string[];
+  simhash?: string;
+  contentHash?: string;
+};
+
+export async function fetchStatic(url: string) {
+  const resp = await request(url, {
+    maxRedirections: 2,
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (compatible; Crawler/1.0; +https://example.invalid)",
+      "Accept-Language": "da-DK,da;q=0.9,en-US;q=0.8,en;q=0.7",
+    },
+  });
+  if (resp.statusCode < 200 || resp.statusCode >= 400)
+    throw new Error(`HTTP ${resp.statusCode}`);
+  const ctype = String(resp.headers["content-type"] || "");
+  if (!ctype.includes("text/html")) throw new Error(`Not HTML: ${ctype}`);
+  const html = await resp.body.text();
+  return html;
+}
+
+export function cheerioExtract(
+  html: string,
+  baseUrl: string,
+  selectorsCsv: string
+): ExtractResult {
+  // Cheerio v1.1.x – options object is optional; deprecated keys removed
+  const $ = cheerioLoad(html);
+
+  const title = ($("title").first().text() || "").trim() || null;
+  const selectors = csvToSelectors(selectorsCsv);
+
+  let bodyTree: any = null;
+  let bodyHtml = "";
+
+  if (selectors.length) {
+    const uniq: any[] = [];
+    for (const sel of selectors) {
+      $(sel).each((_i, el) => {
+        if (!uniq.includes(el)) uniq.push(el);
+      });
+    }
+    bodyHtml = uniq.map((el) => $.html(el)).join("\n");
+    const asText = uniq
+      .map((el) => $(el).text())
+      .join("\n")
+      .replace(/\s+/g, " ")
+      .trim();
+    bodyTree = asText ? { children: [{ text: asText }] } : null;
+  } else {
+    const textAll = $("body").text().replace(/\s+/g, " ").trim();
+    bodyTree = textAll ? { children: [{ text: textAll }] } : null;
+  }
+
+  const anchors = [
+    ...new Set(
+      $("a[href]")
+        .map((_, a) => $(a).attr("href") || "")
+        .get()
+    ),
+  ]
+    .filter(Boolean)
+    .map((h) => new URL(h, baseUrl).toString());
+
+  const text = bodyTree?.children?.[0]?.text || "";
+  const contentHash = sha256(text);
+  const simhash = toSimhash(text);
+
+  return {
+    title,
+    body: bodyTree,
+    html: bodyHtml,
+    text,
+    anchors,
+    contentHash,
+    simhash,
+  };
+}
+
+export function sha256(s: string): string {
+  return crypto
+    .createHash("sha256")
+    .update(s || "")
+    .digest("hex");
+}
+export function toSimhash(text: string): string {
+  // very small/deterministic “simhash-like” signature (ok for change gating)
+  return crypto
+    .createHash("sha1")
+    .update((text || "").slice(0, 5000))
+    .digest("hex")
+    .slice(0, 16);
+}
+
 export async function launchBrowser(
   opts: Partial<LaunchOptions> = {}
 ): Promise<Browser> {
@@ -99,76 +169,64 @@ export async function launchBrowser(
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
   ];
-  const base: LaunchOptions = { headless: env.HEADLESS, args };
-  if (env.PUPPETEER_EXECUTABLE_PATH)
-    (base as any).executablePath = env.PUPPETEER_EXECUTABLE_PATH;
+  const base: LaunchOptions = { headless: isTrue(cfg.HEADLESS), args };
+  const exec = (process.env.PUPPETEER_EXECUTABLE_PATH || "") as any;
+  if (exec) (base as any).executablePath = exec;
   return puppeteer.launch({ ...base, ...opts });
 }
-
-export async function newContext(browser: Browser): Promise<BrowserContext> {
-  return browser.createBrowserContext();
+export async function newContext(b: Browser): Promise<BrowserContext> {
+  return b.createBrowserContext();
 }
 
-// ---------- PAGE SETUP & NAV ----------
 export async function configurePage(page: Page) {
-  page.setDefaultNavigationTimeout(env.NAV_TIMEOUT_MS);
-  page.setDefaultTimeout(env.OP_TIMEOUT_MS);
-
+  page.setDefaultNavigationTimeout(cfg.NAV_TIMEOUT_MS);
+  page.setDefaultTimeout(cfg.OP_TIMEOUT_MS);
   await page.setViewport({ width: 1360, height: 900, deviceScaleFactor: 1 });
-
   await page.setRequestInterception(true);
   page.on("request", (req) => {
-    const type = req.resourceType();
-    if (["document", "xhr", "fetch", "script"].includes(type)) req.continue();
+    const t = req.resourceType();
+    if (["document", "xhr", "fetch", "script"].includes(t)) req.continue();
     else req.abort();
   });
-
   await page.setUserAgent(
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
   );
   await page.setExtraHTTPHeaders({
     "Accept-Language": "da-DK,da;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Upgrade-Insecure-Requests": "1",
   });
 }
 
 export async function navigateWithRetries(
   page: Page,
   url: string,
-  retries = env.MAX_NAV_RETRIES
+  retries = cfg.MAX_NAV_RETRIES
 ): Promise<boolean> {
   for (let i = 0; i <= retries; i++) {
     try {
       const resp = await page.goto(url, {
-        waitUntil: "domcontentloaded", // change to 'networkidle2' if needed
-        timeout: env.NAV_TIMEOUT_MS,
+        waitUntil: "domcontentloaded",
+        timeout: cfg.NAV_TIMEOUT_MS,
       });
       const status = resp?.status() ?? 0;
-      const finalUrl = resp?.url() || page.url();
-      console.log(
-        `[NAV TRY #${i}] status=${status} url=${url} final=${finalUrl}`
-      );
       if (status >= 200 && status < 400) return true;
       if (status === 429 || status >= 500 || status === 0)
         throw new Error(`HTTP ${status}`);
-      return false; // 4xx non-retry
-    } catch (e: any) {
-      console.warn(`[NAV ERR #${i}] ${url} -> ${e?.message || e}`);
+      return false;
+    } catch {
       if (i === retries) return false;
-      await sleep(500 * Math.pow(2, i)); // 0.5s,1s,2s...
+      await sleep(500 * Math.pow(2, i));
     }
   }
   return false;
 }
 
-// ---------- CONSENT COOKIE (OPTIONAL) ----------
 export async function setConsentCookieIfConfigured(
   browser: Browser,
   log = makeLogger("cookie")
 ) {
-  const { COOKIE_NAME, COOKIE_VALUE, COOKIE_DOMAIN, COOKIE_URL } = env;
+  const { COOKIE_NAME, COOKIE_VALUE, COOKIE_DOMAIN, COOKIE_URL, COOKIE_PATH } =
+    cfg;
   if (!COOKIE_NAME || !COOKIE_VALUE || !COOKIE_DOMAIN || !COOKIE_URL) return;
-
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
   try {
@@ -179,7 +237,7 @@ export async function setConsentCookieIfConfigured(
       name: COOKIE_NAME,
       value: COOKIE_VALUE,
       domain: COOKIE_DOMAIN,
-      path: env.COOKIE_PATH || "/",
+      path: COOKIE_PATH || "/",
     } as any);
     log.info(`Set consent cookie for domain=${COOKIE_DOMAIN}`);
   } catch (err: any) {
@@ -190,29 +248,14 @@ export async function setConsentCookieIfConfigured(
   }
 }
 
-// ---------- EXTRACTION HELPERS ----------
-export interface ExtractResult {
-  title: string | null;
-  body: any; // normalized node tree or {children:[{text}]} in AI mode
-  html: string; // concatenated innerHTML (selective) or '' (AI mode)
-  anchors: string[];
-}
-
-/** Extracts only from allowed selectors (anchors are still global). */
-export async function extractSelective(
+export async function extractSelectivePptr(
   page: Page,
   selectorsCsv: string
 ): Promise<ExtractResult> {
   const selectors = csvToSelectors(selectorsCsv);
-  const hasBody = await page.$("body").catch(() => null);
-  if (!hasBody || selectors.length === 0) {
-    return {
-      title: await page.title().catch(() => null),
-      body: null,
-      html: "",
-      anchors: [],
-    };
-  }
+  const title = await page.title().catch(() => null);
+  if (selectors.length === 0)
+    return { title, body: null, html: "", text: "", anchors: [] };
 
   const result = await page.evaluate((sels: string[]) => {
     function parse(node: any): any {
@@ -223,83 +266,99 @@ export async function extractSelective(
         const t = node.textContent?.trim();
         return t ? { text: t } : null;
       }
-      const element: any = {};
-      if ((node as Element).attributes?.length) {
-        element.attr = {};
-        for (const attr of (node as Element).attributes)
-          element.attr[attr.name] = attr.value;
-      }
       const kids: any[] = [];
       for (const c of (node as Element).childNodes) {
         const p = parse(c);
         if (p) kids.push(p);
       }
-      if (kids.length === 1) {
-        const ch = kids[0];
-        if (element.attr) ch.attr = { ...(ch.attr || {}), ...element.attr };
-        return ch;
-      }
-      return kids.length ? { ...element, children: kids } : null;
+      if (kids.length === 1) return kids[0];
+      return kids.length ? { children: kids } : null;
     }
-
-    const nodes: HTMLElement[] = [];
+    const seen = new Set<Element>();
+    const uniq: Element[] = [];
     for (const s of sels)
-      document
-        .querySelectorAll(s)
-        .forEach((el) => nodes.push(el as HTMLElement));
-    const uniq = Array.from(new Set(nodes));
+      document.querySelectorAll(s).forEach((el) => {
+        if (!seen.has(el)) {
+          seen.add(el);
+          uniq.push(el);
+        }
+      });
     const children: any[] = [];
     let html = "";
+    let text = "";
     for (const el of uniq) {
       const p = parse(el);
       if (p) children.push(p);
       html += (el as HTMLElement).innerHTML + "\n";
+      text += (el as HTMLElement).innerText + "\n";
     }
-
     const anchors = Array.from(document.querySelectorAll("a[href]"))
       .map((a) => (a as HTMLAnchorElement).href)
       .filter(Boolean);
-
     return {
       body: children.length ? { children } : null,
       html,
+      text: text.replace(/\s+/g, " ").trim(),
       anchors: Array.from(new Set(anchors)),
     };
   }, selectors);
 
-  const title = await page.title().catch(() => null);
+  const contentHash = sha256(result.text || "");
+  const simhash = toSimhash(result.text || "");
   return {
     title,
     body: result.body,
     html: result.html,
+    text: result.text || "",
     anchors: result.anchors as string[],
+    contentHash,
+    simhash,
   };
 }
 
-/** AI mode: capture full body text + all anchors; no innerHTML. */
-export async function extractAiMode(page: Page): Promise<ExtractResult> {
-  const title = await page.title().catch(() => null);
-  const text = await page
-    .$eval("body", (el) => (el as HTMLElement).innerText)
-    .catch(() => "");
-  const anchors = await page
-    .$$eval("a[href]", (as) => [
-      ...new Set(as.map((a) => (a as HTMLAnchorElement).href)),
-    ])
-    .catch(() => []);
-  const body = text ? { children: [{ text }] } : null;
-  return { title, body, html: "", anchors: anchors as string[] };
+// --- robots.txt helper (with explicit types) ---
+interface Robots {
+  isAllowed: (url: string, ua?: string) => boolean;
 }
-export async function applyStealth(page: Page) {
-  // Basic stealth: remove webdriver flag, set languages/plugins/hardware concurrency
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, "webdriver", { get: () => false });
-    // @ts-ignore
-    window.chrome = { runtime: {} };
-    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
-    Object.defineProperty(navigator, "languages", {
-      get: () => ["da-DK", "da", "en-US", "en"],
-    });
-    Object.defineProperty(navigator, "hardwareConcurrency", { get: () => 8 });
-  });
+type RobotsFactory = (url: string, body: string) => Robots;
+const robotsFactory = robotsParserImport as unknown as RobotsFactory;
+
+const robotsCache = new Map<string, Robots>();
+
+export async function allowedByRobots(url: string): Promise<boolean> {
+  try {
+    const u = new URL(url);
+    const robotsUrl = `${u.origin}/robots.txt`;
+    let robots = robotsCache.get(u.origin);
+    if (!robots) {
+      const res = await request(robotsUrl);
+      const body =
+        res.statusCode >= 200 && res.statusCode < 300
+          ? await res.body.text()
+          : "";
+      robots = robotsFactory(robotsUrl, body);
+      robotsCache.set(u.origin, robots);
+    }
+    return robots.isAllowed(url, "*") ?? true;
+  } catch {
+    return true;
+  }
+}
+
+// Simple sitemap discovery (optional)
+export async function discoverSitemaps(startUrl: string): Promise<string[]> {
+  if (!isTrue(process.env.ENABLE_SITEMAP || cfg.ENABLE_SITEMAP)) return [];
+  try {
+    const origin = new URL(startUrl).origin;
+    const robotsUrl = `${origin}/robots.txt`;
+    const resp = await request(robotsUrl);
+    if (resp.statusCode < 200 || resp.statusCode >= 400) return [];
+    const txt = await resp.body.text();
+    const maps = [...txt.matchAll(/^sitemap:\s*(.+)$/gim)].map((m) =>
+      m[1].trim()
+    );
+    return maps.filter(Boolean);
+  } catch {
+    return [];
+  }
 }
