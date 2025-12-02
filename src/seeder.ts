@@ -1,13 +1,20 @@
-import Redis from 'ioredis';
+import { Redis } from "ioredis";
 
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const QUEUE_KEY = process.env.QUEUE_KEY || 'crawl:queue';
-const SEED_URL  = process.env.SEED_URL  || 'https://www.lauritz.com';
+const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
+const SEED_URL = process.env.SEED_URL || "https://www.lauritz.com";
 
 (async () => {
   const redis = new Redis(REDIS_URL);
-  const task = { url: SEED_URL, depth: 0 };
-  await redis.lpush(QUEUE_KEY, JSON.stringify(task));
-  console.log('Seeded:', task);
+  await redis.del(
+    "crawl:queue",
+    "ai:revisit",
+    "crawl:seen",
+    "crawl:inflight",
+    "crawl:results_db",
+    "crawl:results_raw",
+    "crawl:dlq"
+  );
+  await redis.lpush("crawl:queue", JSON.stringify({ url: SEED_URL, depth: 0 }));
+  console.log("Seeded:", SEED_URL);
   process.exit(0);
 })();

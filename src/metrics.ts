@@ -1,45 +1,50 @@
-import http from 'node:http';
-import client from 'prom-client';
+import http from "node:http";
+import client from "prom-client";
 
-const registry = new client.Registry();
+export const registry = new client.Registry();
 client.collectDefaultMetrics({ register: registry });
 
-export const pagesProcessed = new client.Counter({
-  name: 'crawler_pages_processed_total',
-  help: 'Total pages successfully processed',
-  labelNames: ['mode', 'queue'], // mode=ai|css, queue=initial|ai-revisit
-});
-export const pagesFailed = new client.Counter({
-  name: 'crawler_pages_failed_total',
-  help: 'Total pages failed',
-  labelNames: ['reason'], // reason=navigate|exception
-});
-export const linksQueued = new client.Counter({
-  name: 'crawler_links_enqueued_total',
-  help: 'Links enqueued (same-origin)',
-});
-export const queueDepth = new client.Gauge({
-  name: 'crawler_queue_depth',
-  help: 'Current frontier queue depth',
-  labelNames: ['queue'], // queue=crawl|ai_revisit
-});
+export type Cfg = {
+  port?: number;
+  serviceName?: string;
+};
 
-registry.registerMetric(pagesProcessed);
-registry.registerMetric(pagesFailed);
-registry.registerMetric(linksQueued);
-registry.registerMetric(queueDepth);
-
-export function startMetricsServer(port = Number(process.env.METRICS_PORT || 9100)) {
-  const server = http.createServer(async (_req, res) => {
-    if (_req.url === '/metrics') {
+export function startMetricsServer({
+  port = 9100,
+  serviceName = "service",
+}: Cfg = {}) {
+  const server = http.createServer(async (req, res) => {
+    if (req.url === "/metrics") {
       const body = await registry.metrics();
-      res.writeHead(200, { 'Content-Type': registry.contentType });
+      res.writeHead(200, { "Content-Type": registry.contentType });
       return res.end(body);
     }
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('ok');
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("ok");
   });
   server.listen(port, () => {
-    console.log(`[metrics] listening on :${port}`);
+    // eslint-disable-next-line no-console
+    console.log(`[metrics] ${serviceName} listening on :${port}`);
   });
+}
+
+export function counter(name: string, help: string, labelNames: string[] = []) {
+  const c = new client.Counter({ name, help, labelNames });
+  registry.registerMetric(c);
+  return c;
+}
+export function gauge(name: string, help: string, labelNames: string[] = []) {
+  const g = new client.Gauge({ name, help, labelNames });
+  registry.registerMetric(g);
+  return g;
+}
+export function histogram(
+  name: string,
+  help: string,
+  buckets: number[] = [0.05, 0.1, 0.25, 0.5, 1, 2, 5],
+  labelNames: string[] = []
+) {
+  const h = new client.Histogram({ name, help, buckets, labelNames });
+  registry.registerMetric(h);
+  return h;
 }

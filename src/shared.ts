@@ -4,7 +4,7 @@ import puppeteer, {
   Page,
   LaunchOptions,
 } from "puppeteer";
-import Redis from "ioredis";
+import { Redis } from "ioredis";
 import normalizeUrl from "normalize-url";
 
 // ---------- ENV HELPERS ----------
@@ -117,33 +117,40 @@ export async function configurePage(page: Page) {
   await page.setViewport({ width: 1360, height: 900, deviceScaleFactor: 1 });
 
   await page.setRequestInterception(true);
-  page.on('request', (req) => {
+  page.on("request", (req) => {
     const type = req.resourceType();
-    if (['document', 'xhr', 'fetch', 'script'].includes(type)) req.continue();
+    if (["document", "xhr", "fetch", "script"].includes(type)) req.continue();
     else req.abort();
   });
 
   await page.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
   );
   await page.setExtraHTTPHeaders({
-    'Accept-Language': 'da-DK,da;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Upgrade-Insecure-Requests': '1',
+    "Accept-Language": "da-DK,da;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Upgrade-Insecure-Requests": "1",
   });
 }
 
-export async function navigateWithRetries(page: Page, url: string, retries = env.MAX_NAV_RETRIES): Promise<boolean> {
+export async function navigateWithRetries(
+  page: Page,
+  url: string,
+  retries = env.MAX_NAV_RETRIES
+): Promise<boolean> {
   for (let i = 0; i <= retries; i++) {
     try {
       const resp = await page.goto(url, {
-        waitUntil: 'domcontentloaded', // change to 'networkidle2' if needed
-        timeout: env.NAV_TIMEOUT_MS
+        waitUntil: "domcontentloaded", // change to 'networkidle2' if needed
+        timeout: env.NAV_TIMEOUT_MS,
       });
       const status = resp?.status() ?? 0;
       const finalUrl = resp?.url() || page.url();
-      console.log(`[NAV TRY #${i}] status=${status} url=${url} final=${finalUrl}`);
+      console.log(
+        `[NAV TRY #${i}] status=${status} url=${url} final=${finalUrl}`
+      );
       if (status >= 200 && status < 400) return true;
-      if (status === 429 || status >= 500 || status === 0) throw new Error(`HTTP ${status}`);
+      if (status === 429 || status >= 500 || status === 0)
+        throw new Error(`HTTP ${status}`);
       return false; // 4xx non-retry
     } catch (e: any) {
       console.warn(`[NAV ERR #${i}] ${url} -> ${e?.message || e}`);
@@ -286,11 +293,13 @@ export async function extractAiMode(page: Page): Promise<ExtractResult> {
 export async function applyStealth(page: Page) {
   // Basic stealth: remove webdriver flag, set languages/plugins/hardware concurrency
   await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    Object.defineProperty(navigator, "webdriver", { get: () => false });
     // @ts-ignore
     window.chrome = { runtime: {} };
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-    Object.defineProperty(navigator, 'languages', { get: () => ['da-DK', 'da', 'en-US', 'en'] });
-    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+    Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, "languages", {
+      get: () => ["da-DK", "da", "en-US", "en"],
+    });
+    Object.defineProperty(navigator, "hardwareConcurrency", { get: () => 8 });
   });
 }

@@ -1,20 +1,34 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import Redis from "ioredis";
+import type { Redis } from "ioredis";
 
-const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
-const RESULTS_KEY = process.env.RESULTS_KEY || "crawl:results";
-const OUT_PATH = process.env.OUT_PATH || "/data/out.jsonl";
+export function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
-(async () => {
-  const redis = new Redis(REDIS_URL);
-  fs.mkdirSync(path.dirname(OUT_PATH), { recursive: true });
-  const stream = fs.createWriteStream(OUT_PATH, { flags: "a" });
-
-  console.log("Collector writing to", OUT_PATH);
-  while (true) {
-    const res = await redis.brpop(RESULTS_KEY, 5);
-    if (!res) continue;
-    stream.write(res[1] + "\n");
+export async function brpopJson<T = any>(
+  redis: Redis,
+  key: string,
+  timeoutSec = 5
+): Promise<T | null> {
+  const res = await redis.brpop(key, timeoutSec);
+  if (!res) return null;
+  const [, payload] = res;
+  try {
+    return JSON.parse(payload) as T;
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[collector] JSON parse failed for key=${key}:`,
+      (e as any)?.message || e
+    );
+    return null;
   }
-})();
+}
+
+export function makeLog(prefix: string) {
+  const tag = `[${prefix}]`;
+  return {
+    info: (m: string, ...a: any[]) => console.log(tag, m, ...a),
+    warn: (m: string, ...a: any[]) => console.warn(tag, m, ...a),
+    error: (m: string, ...a: any[]) => console.error(tag, m, ...a),
+  };
+}
