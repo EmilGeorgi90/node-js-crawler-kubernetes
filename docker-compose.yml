@@ -70,7 +70,7 @@ services:
     image: dpage/pgadmin4:8.12
     container_name: pgadmin
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@local
+      PGADMIN_DEFAULT_EMAIL: admin@local.com
       PGADMIN_DEFAULT_PASSWORD: admin123
     depends_on: [postgres]
     ports: ["5050:80"]
