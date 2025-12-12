@@ -1,35 +1,34 @@
 {
-  "name": "crawler-cluster",
-  "version": "1.1.0",
+  "name": "crawler",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "seed": "ts-node src/seeder.ts",
-    "start:worker": "node dist/src/worker.js",
-    "start:collector:mongo": "node dist/src/collector-mongo.js",
-    "start:collector:s3": "node dist/src/collector-s3.js",
-    "start:ai-enricher": "node dist/src/ai-enricher.js",
-    "start:collector:embed": "node dist/src/collector-embed.js"
+    "seed": "node dist/src/seeder.js",
+    "dev:worker": "tsx src/worker.ts",
+    "dev:ai": "tsx src/ai-enricher.ts",
+    "dev:collector:mongo": "tsx src/collector-mongo.ts",
+    "dev:collector:s3": "tsx src/collector-s3.ts",
+    "dev:collector:embed": "tsx src/collector-embed.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.676.0",
-    "cheerio": "^1.1.2",
-    "ioredis": "^5.4.1",
-    "mongodb": "^6.8.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "@aws-sdk/client-s3": "^3.665.0",
+    "cheerio": "^1.0.0",
+    "kafkajs": "^2.2.4",
+    "mongodb": "^6.9.0",
+    "node-fetch": "^3.3.2",
     "normalize-url": "^8.0.2",
+    "p-limit": "^6.2.0",
     "pg": "^8.12.0",
     "prom-client": "^15.1.3",
     "puppeteer": "^24.10.2",
-    "robots-parser": "^3.0.1",
-    "undici": "^6.19.8",
-    "zod": "^3.23.8"
+    "robots-parser": "^3.0.1"
   },
   "devDependencies": {
-    "@types/ioredis": "^5.0.0",
     "@types/node": "^22.10.7",
-    "@types/pg": "^8.15.6",
-    "tsx": "^4.21.0",
+    "tsx": "^4.19.1",
     "typescript": "^5.7.3"
   },
   "packageManager": "pnpm@10.18.2+sha512.9fb969fa749b3ade6035e0f109f0b8a60b5d08a1a87fdf72e337da90dcc93336e2280ca4e44f2358a649b83c17959e9993e777c2080879f3801e6f0d999ad3dd"

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "result.page.v1.json",
+  "type": "object",
+  "required": ["sitesUrl", "meta"],
+  "properties": {
+    "sitesUrl": { "type": "string", "format": "uri" },
+    "title": { "type": ["string", "null"] },
+    "body": {
+      "type": ["object", "null"],
+      "properties": { "children": { "type": "array" } },
+      "additionalProperties": true
+    },
+    "html": { "type": "string" },
+    "meta": {
+      "type": "object",
+      "required": ["fetchedAt", "domain", "selector_mode", "contentHash"],
+      "properties": {
+        "fetchedAt": { "type": "string", "format": "date-time" },
+        "domain": { "type": "string" },
+        "selector_mode": { "type": "string" },
+        "contentHash": { "type": "string" },
+        "simhash": { "type": "string" },
+        "aiConfidence": { "type": ["number", "null"] }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

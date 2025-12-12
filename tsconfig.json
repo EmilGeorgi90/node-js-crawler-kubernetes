@@ -1,17 +1,16 @@
 {
   "compilerOptions": {
     "target": "ES2021",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "lib": ["ES2021", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
     "outDir": "dist",
     "rootDir": ".",
-    "declaration": false,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "strict": false,
-    "resolveJsonModule": true
+    "strict": false
   },
-  "include": ["src/**/*.ts", "ai/**/*.ts"],
+  "include": ["src/**/*.ts", "schemas/**/*.json"],
   "exclude": ["node_modules"]
 }

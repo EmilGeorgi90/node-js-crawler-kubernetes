@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "result.enriched.v1.json",
+  "type": "object",
+  "allOf": [{ "$ref": "result.page.v1.json" }],
+  "properties": {
+    "detectedType": { "type": "string", "enum": ["product", "page"] }
+  }
+}

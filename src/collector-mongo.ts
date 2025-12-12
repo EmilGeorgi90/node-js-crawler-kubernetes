@@ -1,119 +1,51 @@
-import { MongoClient, ServerApiVersion } from "mongodb";
-import { Redis } from "ioredis";
-import http from "node:http";
-import client from "prom-client";
+import { MongoClient, ServerApiVersion } from 'mongodb';
+import client from 'prom-client';
+import { KafkaBus } from './queue-kafka.js';
+import { cfg } from './config.js';
+import { startMetricsServer } from './shared.js';
 
 const registry = new client.Registry();
-client.collectDefaultMetrics({ register: registry });
-const docsIngested = new client.Counter({
-  name: "collector_mongo_docs_ingested_total",
-  help: "Docs ingested",
-});
-const productsUpserted = new client.Counter({
-  name: "collector_mongo_products_upserted_total",
-  help: "Products upserted",
-});
-const writeFailures = new client.Counter({
-  name: "collector_mongo_write_failures_total",
-  help: "Write failures",
-});
-const backlogGauge = new client.Gauge({
-  name: "collector_mongo_backlog_depth",
-  help: "Redis backlog",
-});
-const writeDuration = new client.Histogram({
-  name: "collector_mongo_write_duration_seconds",
-  help: "Write latency",
-  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2],
-});
-function startMetricsServer(port = Number(process.env.METRICS_PORT || 9101)) {
-  const srv = http.createServer(async (_req, res) => {
-    if (_req.url === "/metrics") {
-      const b = await registry.metrics();
-      res.writeHead(200, { "Content-Type": registry.contentType });
-      return res.end(b);
-    }
-    res.writeHead(200, { "Content-Type": "text/plain" });
-    res.end("ok");
-  });
-  srv.listen(port, () => console.log(`[metrics] collector-mongo on :${port}`));
-}
-
-const REDIS_URL = process.env.REDIS_URL || "redis://redis:6379";
-const RESULTS_KEY = process.env.RESULTS_DB_KEY || "crawl:results_db";
-const MONGO_URL = process.env.MONGO_URL || "mongodb://mongo:27017";
-const DB_NAME = process.env.DB_NAME || "crawler";
-const COL_PAGES = process.env.COL_PAGES || "pages";
-const COL_PRODUCTS = process.env.COL_PRODUCTS || "products";
-const PRODUCT_URL_REGEX = new RegExp(
-  process.env.PRODUCT_URL_REGEX ?? String.raw`\/[^\/]+\/(\d+)(?:\?.*)?$`,
-  "i"
-);
+const inserted = new client.Counter({ name: 'collector_mongo_inserted_total', help: 'docs upserted', registers: [registry] });
+startMetricsServer(registry, Number(process.env.METRICS_PORT || '9101'));
 
 (async () => {
-  startMetricsServer();
-  const redis = new Redis(REDIS_URL);
-  const mongo = new MongoClient(MONGO_URL, { serverApi: ServerApiVersion.v1 });
+  const mongo = new MongoClient(process.env.MONGO_URL || 'mongodb://mongo:27017', { serverApi: ServerApiVersion.v1 });
   await mongo.connect();
-  const db = mongo.db(DB_NAME);
-  const pages = db.collection(COL_PAGES);
-  const products = db.collection(COL_PRODUCTS);
-
+  const db = mongo.db(process.env.DB_NAME || 'crawler');
+  const pages = db.collection(process.env.COL_PAGES || 'pages');
+  const products = db.collection(process.env.COL_PRODUCTS || 'products');
   await pages.createIndex({ url: 1 }, { unique: true });
-  await pages.createIndex({ detectedType: 1, "meta.fetchedAt": -1 });
+  await pages.createIndex({ 'meta.contentHash': 1 }, { unique: false });
+  await pages.createIndex({ detectedType: 1, 'meta.fetchedAt': -1 });
   await products.createIndex({ productId: 1 }, { sparse: true });
   await products.createIndex({ slug: 1 }, { sparse: true });
 
-  console.log("collector-mongo up");
-  while (true) {
-    try {
-      try {
-        backlogGauge.set(await redis.llen(RESULTS_KEY));
-      } catch {}
-      const res = await redis.brpop(RESULTS_KEY, 5);
-      if (!res) continue;
+  const bus = new KafkaBus();
+  await bus.start();
 
-      const doc = JSON.parse(res[1]) as any;
+  await bus.runConsumer({
+    topics: [cfg.TOPIC_ENRICHED],
+    groupId: cfg.GROUP_DB,
+    concurrency: 3,
+    handler: async (buf) => {
+      const doc = JSON.parse(buf.toString());
       const url: string = doc.sitesUrl;
-      const now = new Date(doc?.meta?.fetchedAt ?? Date.now());
-
-      const m = PRODUCT_URL_REGEX.exec(url);
-      const isProduct = !!m;
-      const productId = m?.[1] ?? null;
-
-      const pageDoc = {
-        url,
-        title: doc.title ?? null,
-        body: doc.body ?? null,
-        detectedType: isProduct ? "product" : "page",
-        meta: { ...(doc.meta || {}), fetchedAt: now },
-      };
-
-      const end = writeDuration.startTimer();
+      const now = new Date(doc?.meta?.fetchedAt || Date.now());
+      const pageDoc = { url, title: doc.title ?? null, body: doc.body ?? null, detectedType: doc.detectedType || 'page', meta: { ...(doc.meta||{}), fetchedAt: now } };
       await pages.updateOne({ url }, { $set: pageDoc }, { upsert: true });
-      if (isProduct) {
-        const parts = url.split("?")[0].split("/").filter(Boolean);
+      inserted.inc();
+      const m = /\/[^/]+\/(\d+)(?:\?.*)?$/.exec(url);
+      if (m) {
+        const productId = m[1];
+        const parts = url.split('?')[0].split('/').filter(Boolean);
         const slug = parts.at(-2) ?? null;
         await products.updateOne(
           { url },
-          {
-            $set: {
-              url,
-              slug,
-              productId,
-              title: doc.title ?? null,
-              fetchedAt: now,
-            },
-          },
+          { $set: { url, slug, productId, title: doc.title ?? null, fetchedAt: now } },
           { upsert: true }
         );
-        productsUpserted.inc();
       }
-      end();
-      docsIngested.inc();
-    } catch (e) {
-      writeFailures.inc();
-      console.error("collector-mongo error:", (e as any)?.message || e);
+      return 'ok';
     }
-  }
+  });
 })();

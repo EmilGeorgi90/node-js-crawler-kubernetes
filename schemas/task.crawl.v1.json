@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "task.crawl.v1.json",
+  "type": "object",
+  "required": ["url", "depth"],
+  "properties": {
+    "url": { "type": "string", "format": "uri" },
+    "depth": { "type": "integer", "minimum": 0 },
+    "priority": { "type": "string", "enum": ["normal", "high"] }
+  },
+  "additionalProperties": false
+}

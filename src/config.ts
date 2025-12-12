@@ -1,57 +1,27 @@
-import { z } from 'zod';
+export const cfg = {
+  KAFKA_BROKERS: (process.env.KAFKA_BROKERS || 'redpanda:9092').split(','),
+  KAFKA_CLIENT_ID: process.env.KAFKA_CLIENT_ID || 'crawler',
 
-const Env = z.object({
-  REDIS_URL: z.string().default('redis://redis:6379'),
-  // Frontier: list|stream
-  FRONTIER_MODE: z.enum(['list', 'stream']).default('stream'),
+  TOPIC_INITIAL: process.env.TOPIC_INITIAL || 'crawl.initial',
+  TOPIC_REVISIT: process.env.TOPIC_REVISIT || 'crawl.revisit',
+  TOPIC_PRIORITY: process.env.TOPIC_PRIORITY || 'crawl.priority',
+  TOPIC_RESULTS_DB: process.env.TOPIC_RESULTS_DB || 'results.db',
+  TOPIC_RESULTS_RAW: process.env.TOPIC_RESULTS_RAW || 'results.raw',
+  TOPIC_ENRICHED: process.env.TOPIC_ENRICHED || 'results.enriched',
+  TOPIC_RETRY_30S: process.env.TOPIC_RETRY_30S || 'crawl.initial.retry.30s',
+  TOPIC_RETRY_5M: process.env.TOPIC_RETRY_5M || 'crawl.initial.retry.5m',
+  TOPIC_DLQ: process.env.TOPIC_DLQ || 'crawl.initial.dlq',
 
-  // Redis keys/streams
-  QUEUE_KEY: z.string().default('crawl:queue'),
-  REVISIT_KEY: z.string().default('ai:revisit'),
-  REVISIT_PENDING_KEY: z.string().default('ai:revisit:pending'),
-  SEEN_KEY: z.string().default('crawl:seen'),
-  INFLIGHT_KEY: z.string().default('crawl:inflight'),
-  DLQ_KEY: z.string().default('crawl:dlq'),
+  GROUP_WORKER: process.env.KAFKA_GROUP_WORKER || 'workers',
+  GROUP_DB: process.env.KAFKA_GROUP_DB || 'collector-mongo',
+  GROUP_RAW: process.env.KAFKA_GROUP_RAW || 'collector-raw',
+  GROUP_EMB: process.env.KAFKA_GROUP_EMB || 'collector-embed',
+  GROUP_AI: process.env.KAFKA_GROUP_AI || 'ai-enricher',
 
-  // Streams config (only used when FRONTIER_MODE=stream)
-  QUEUE_STREAM: z.string().default('crawl:stream'),
-  REVISIT_STREAM: z.string().default('ai:revisit:stream'),
-  QUEUE_GROUP: z.string().default('workers'),
-  WORKER_CONSUMER: z.string().default(() => `w-${Math.random().toString(36).slice(2, 8)}`),
+  HEADLESS: (process.env.HEADLESS || 'true') === 'true',
+  STATIC_FIRST: (process.env.STATIC_FIRST || 'true') === 'true',
+  INCLUDE_SELECTORS: process.env.INCLUDE_SELECTORS || '',
+  MAX_DEPTH: Number(process.env.MAX_DEPTH || '3'),
 
-  // Results (lists)
-  RESULTS_DB_KEY: z.string().default('crawl:results_db'),
-  RESULTS_RAW_KEY: z.string().default('crawl:results_raw'),
-
-  // Crawl behavior
-  MAX_DEPTH: z.coerce.number().int().min(0).max(10).default(3),
-  AI_MODE: z.enum(['true', 'false']).default('true'),
-  INCLUDE_SELECTORS: z.string().default(''),
-  HEADLESS: z.enum(['true', 'false']).default('true'),
-
-  // Fetch timeouts
-  NAV_TIMEOUT_MS: z.coerce.number().default(30000),
-  OP_TIMEOUT_MS: z.coerce.number().default(15000),
-  MAX_NAV_RETRIES: z.coerce.number().int().min(0).max(5).default(2),
-
-  // Cookie (optional)
-  COOKIE_URL: z.string().default(''),
-  COOKIE_NAME: z.string().default(''),
-  COOKIE_VALUE: z.string().default(''),
-  COOKIE_DOMAIN: z.string().default(''),
-  COOKIE_PATH: z.string().default('/'),
-
-  // Metrics
-  METRICS_PORT: z.coerce.number().default(9100),
-
-  // Static-first fetch toggle
-  STATIC_FIRST: z.enum(['true','false']).default('true'),
-
-  // Sitemap seeding
-  ENABLE_SITEMAP: z.enum(['true','false']).default('true')
-});
-
-export type Cfg = z.infer<typeof Env>;
-export const cfg: Cfg = Env.parse(process.env);
-
-export const isTrue = (v: string) => v.toLowerCase() === 'true';
+  METRICS_PORT: Number(process.env.METRICS_PORT || '9100'),
+};

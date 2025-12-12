@@ -1,66 +1,53 @@
-# docker-compose.yml
-
 services:
-  # ---------------- Infra ----------------
-  redis:
-    image: redis:7-alpine
-    container_name: redis
-    ports: ["6379:6379"]
+  # ===== Kafka (Redpanda) + Console =====
+  redpanda:
+    image: redpandadata/redpanda:v23.3.10
+    container_name: redpanda
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --check=false
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    ports: ["9092:9092"]
 
-  redis_exporter:
-    image: oliver006/redis_exporter:v1.62.0
-    container_name: redis_exporter
+  redpanda_console:
+    image: redpandadata/console:v2.7.2
+    container_name: redpanda_console
     environment:
-      REDIS_ADDR: redis://redis:6379
-    depends_on: [redis]
-    ports: ["9121:9121"] # optional for host curl
+      KAFKA_BROKERS: redpanda:9092
+    ports: ["8080:8080"]
+    depends_on: [redpanda]
 
+  # ===== Databases =====
   mongo:
     image: mongo:7
     container_name: mongo
     ports: ["27017:27017"]
-    volumes:
-      - mongo_data:/data/db
-
-  mongodb_exporter:
-    image: bitnami/mongodb-exporter
-    container_name: mongodb_exporter
-    environment:
-      MONGODB_URI: mongodb://mongo:27017
-    depends_on: [mongo]
-    ports: ["9216:9216"] # optional
+    volumes: ["mongo_data:/data/db"]
 
   postgres:
-    image: ankane/pgvector:v0.5.1
+    image: ankane/pgvector
     container_name: postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: vector
     ports: ["5432:5432"]
-    volumes:
-      - pg_data:/var/lib/postgresql/data
+    volumes: ["pg_data:/var/lib/postgresql/data"]
 
-  postgres_exporter:
-    image: prometheuscommunity/postgres-exporter:v0.15.0
-    container_name: postgres_exporter
-    environment:
-      # format: postgresql://user:pass@host:port/dbname?sslmode=disable
-      DATA_SOURCE_NAME: postgresql://postgres:postgres@postgres:5432/vector?sslmode=disable
-    depends_on: [postgres]
-    ports: ["9187:9187"] # optional
-
-  # ---------------- Dashboards ----------------
-  redisinsight:
-    image: redislabs/redisinsight:latest
-    container_name: redisinsight
-    ports: ["5540:5540"]
-
+  # ===== GUI tools =====
   mongo_express:
     image: mongo-express:1.0.2-20
     container_name: mongo_express
     environment:
       ME_CONFIG_MONGODB_SERVER: mongo
+      ME_CONFIG_MONGODB_URL: mongodb://mongo:27017
       ME_CONFIG_BASICAUTH_USERNAME: admin
       ME_CONFIG_BASICAUTH_PASSWORD: admin123
     depends_on: [mongo]
@@ -73,8 +60,21 @@ services:
       PGADMIN_DEFAULT_EMAIL: admin@local.com
       PGADMIN_DEFAULT_PASSWORD: admin123
     depends_on: [postgres]
-    ports: ["5050:80"]
+    ports: ["8082:80"]
 
+  # Optional: Redis + RedisInsight (handy GUI even if not used by the app)
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports: ["6379:6379"]
+
+  redisinsight:
+    image: redis/redisinsight:latest
+    container_name: redisinsight
+    depends_on: [redis]
+    ports: ["5540:5540"]
+
+  # ===== Monitoring =====
   prometheus:
     image: prom/prometheus:v2.54.1
     container_name: prometheus
@@ -82,10 +82,11 @@ services:
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
-      - worker         # scrape custom app metrics
-      - redis_exporter
-      - mongodb_exporter
-      - postgres_exporter
+      - worker
+      - collector_mongo
+      - collector_s3
+      - collector_embed
+      - ai_enricher
 
   grafana:
     image: grafana/grafana:11.3.1
@@ -94,49 +95,70 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin123
-    # Optional: auto-provision Prometheus DS if you add the file locally
-    # volumes:
-    #   - ./grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on: [prometheus]
 
-  # ---------------- App: PROD (dist) ----------------
+  # ===== Mandatory AI & Embeddings =====
+  ai:
+    build: ./ai
+    image: crawler-ai:local
+    container_name: ai
+    ports: ["8001:8001"]
+
+  embeddings:
+    build: ./embeddings
+    image: crawler-embeddings:local
+    container_name: embeddings
+    environment:
+      VECTOR_DIM: "384"
+    ports: ["8002:8002"]
+
+  # ===== App services =====
   worker:
     build:
       context: .
       target: prod
-    image: crawler-cluster:prod
+    image: crawler-worker:prod
     container_name: worker
     environment:
-      REDIS_URL: redis://redis:6379
-      RESULTS_DB_KEY: crawl:results_db
-      RESULTS_RAW_KEY: crawl:results_raw
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_CLIENT_ID: crawler
+      KAFKA_GROUP_WORKER: workers
+      TOPIC_INITIAL: crawl.initial
+      TOPIC_REVISIT: crawl.revisit
+      TOPIC_PRIORITY: crawl.priority
+      TOPIC_RESULTS_DB: results.db
+      TOPIC_RESULTS_RAW: results.raw
+      TOPIC_RETRY_30S: crawl.initial.retry.30s
+      TOPIC_RETRY_5M: crawl.initial.retry.5m
+      TOPIC_DLQ: crawl.initial.dlq
       HEADLESS: "true"
       STATIC_FIRST: "true"
-      FRONTIER_MODE: "stream"
+      INCLUDE_SELECTORS: ""
+      MAX_DEPTH: "3"
       METRICS_PORT: "9100"
-      # AI_MODE: "false"
-      # INCLUDE_SELECTORS: "body,.main"   # set if you want CSS-only collection
-      PUPPETEER_SKIP_DOWNLOAD: "true"
-      PUPPETEER_EXECUTABLE_PATH: "/usr/bin/chromium"
-    depends_on: [redis]
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+    depends_on: [redpanda]
     shm_size: "1gb"
-    command: ["node","dist/src/worker.js"]
-    ports: ["9100:9100"]  # optional for host curl
+    command: ["node", "dist/src/worker.js"]
+    ports: ["9100:9100"]
 
   ai_enricher:
     build:
       context: .
-      target: prod
     image: crawler-ai:prod
     container_name: ai_enricher
     environment:
-      REDIS_URL: redis://redis:6379
-      MONGO_URL: mongodb://mongo:27017
-      DB_NAME: crawler
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_GROUP_AI: ai-enricher
+      TOPIC_RESULTS_DB: results.db
+      TOPIC_ENRICHED: results.enriched
+      TOPIC_REVISIT: crawl.revisit
       METRICS_PORT: "9102"
-    depends_on: [redis, mongo]
-    command: ["node","dist/src/ai-enricher.js"]
-    ports: ["9102:9102"]  # optional
+      AI_URL: http://ai:8001
+      AI_PATH: /detect
+    depends_on: [redpanda, ai]
+    command: ["node", "dist/src/ai-enricher.js"]
+    ports: ["9102:9102"]
 
   collector_mongo:
     build:
@@ -145,17 +167,18 @@ services:
     image: crawler-collector-mongo:prod
     container_name: collector_mongo
     environment:
-      REDIS_URL: redis://redis:6379
-      RESULTS_DB_KEY: crawl:results_db
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_GROUP_DB: collector-mongo
+      TOPIC_ENRICHED: results.enriched
       MONGO_URL: mongodb://mongo:27017
       DB_NAME: crawler
       COL_PAGES: pages
       COL_PRODUCTS: products
       PRODUCT_URL_REGEX: '/[^/]+/(\\d+)(?:\\?.*)?$'
       METRICS_PORT: "9101"
-    depends_on: [redis, mongo]
-    command: ["node","dist/src/collector-mongo.js"]
-    ports: ["9101:9101"]  # optional
+    depends_on: [redpanda, mongo]
+    command: ["node", "dist/src/collector-mongo.js"]
+    ports: ["9101:9101"]
 
   collector_s3:
     build:
@@ -164,99 +187,38 @@ services:
     image: crawler-collector-s3:prod
     container_name: collector_s3
     environment:
-      REDIS_URL: redis://redis:6379
-      RESULTS_RAW_KEY: crawl:results_raw
-      S3_DIR: /data/lake        # local lake path inside container
-      METRICS_PORT: "9103"
-    volumes:
-      - ./data:/data            # maps ./data to /data
-    depends_on: [redis]
-    command: ["node","dist/src/collector-s3.js"]
-    ports: ["9103:9103"]  # optional
-
-  # ---------------- App: DEV (raw .ts via tsx) ----------------
-  worker_dev:
-    profiles: ["dev"]
-    build:
-      context: .
-      target: dev
-    image: crawler-cluster:dev
-    container_name: worker_dev
-    environment:
-      REDIS_URL: redis://redis:6379
-      RESULTS_DB_KEY: crawl:results_db
-      RESULTS_RAW_KEY: crawl:results_raw
-      HEADLESS: "true"
-      STATIC_FIRST: "true"
-      FRONTIER_MODE: "stream"
-      METRICS_PORT: "9100"
-      PUPPETEER_SKIP_DOWNLOAD: "true"
-      PUPPETEER_EXECUTABLE_PATH: "/usr/bin/chromium"
-    depends_on: [redis]
-    shm_size: "1gb"
-    command: ["pnpm","exec","tsx","src/worker.ts"]
-    volumes:
-      - .:/app
-    ports: ["9100:9100"]
-
-  ai_enricher_dev:
-    profiles: ["dev"]
-    build:
-      context: .
-      target: dev
-    image: crawler-ai:dev
-    container_name: ai_enricher_dev
-    environment:
-      REDIS_URL: redis://redis:6379
-      MONGO_URL: mongodb://mongo:27017
-      DB_NAME: crawler
-      METRICS_PORT: "9102"
-    depends_on: [redis, mongo]
-    command: ["pnpm","exec","tsx","src/ai-enricher.ts"]
-    volumes:
-      - .:/app
-    ports: ["9102:9102"]
-
-  collector_mongo_dev:
-    profiles: ["dev"]
-    build:
-      context: .
-      target: dev
-    image: crawler-collector-mongo:dev
-    container_name: collector_mongo_dev
-    environment:
-      REDIS_URL: redis://redis:6379
-      RESULTS_DB_KEY: crawl:results_db
-      MONGO_URL: mongodb://mongo:27017
-      DB_NAME: crawler
-      COL_PAGES: pages
-      COL_PRODUCTS: products
-      PRODUCT_URL_REGEX: '/[^/]+/(\\d+)(?:\\?.*)?$'
-      METRICS_PORT: "9101"
-    depends_on: [redis, mongo]
-    command: ["pnpm","exec","tsx","src/collector-mongo.ts"]
-    volumes:
-      - .:/app
-    ports: ["9101:9101"]
-
-  collector_s3_dev:
-    profiles: ["dev"]
-    build:
-      context: .
-      target: dev
-    image: crawler-collector-s3:dev
-    container_name: collector_s3_dev
-    environment:
-      REDIS_URL: redis://redis:6379
-      RESULTS_RAW_KEY: crawl:results_raw
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_GROUP_RAW: collector-raw
+      TOPIC_RESULTS_RAW: results.raw
       S3_DIR: /data/lake
       METRICS_PORT: "9103"
-    volumes:
-      - .:/app
-      - ./data:/data
-    depends_on: [redis]
-    command: ["pnpm","exec","tsx","src/collector-s3.ts"]
+    volumes: ["./data:/data"]
+    depends_on: [redpanda]
+    command: ["node", "dist/src/collector-s3.js"]
     ports: ["9103:9103"]
+
+  collector_embed:
+    build:
+      context: .
+      target: prod
+    image: crawler-collector-embed:prod
+    container_name: collector_embed
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      KAFKA_GROUP_EMB: collector-embed
+      TOPIC_ENRICHED: results.enriched
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: vector
+      EMBEDDING_DIM: "384"
+      METRICS_PORT: "9104"
+      EMBEDDINGS_URL: http://embeddings:8002
+      EMBEDDINGS_PATH: /embed
+    depends_on: [redpanda, postgres, embeddings]
+    command: ["node", "dist/src/collector-embed.js"]
+    ports: ["9104:9104"]
 
 volumes:
   mongo_data:
