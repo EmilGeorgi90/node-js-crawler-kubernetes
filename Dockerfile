@@ -9,11 +9,13 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm fetch && pnpm install -r --frozen-lockfile
 
+
 FROM base AS build
 COPY tsconfig.json ./
 COPY src ./src
 COPY schemas ./schemas
 RUN pnpm build
+
 
 FROM node:22-alpine AS prod
 RUN apk add --no-cache chromium nss dumb-init

@@ -2,7 +2,9 @@ const seenContent = new Set<string>();
 const seenUrl = new Set<string>();
 
 export function seenUrlOnce(url: string): boolean {
-  if (seenUrl.has(url)) return true; seenUrl.add(url); return false;
+  if (seenUrl.has(url)) return true;
+  seenUrl.add(url);
+  return false;
 }
 
 export function seenContentOnce(contentHash: string): boolean {

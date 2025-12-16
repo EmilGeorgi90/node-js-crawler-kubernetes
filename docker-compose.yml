@@ -62,7 +62,7 @@ services:
     depends_on: [postgres]
     ports: ["8082:80"]
 
-  # Optional: Redis + RedisInsight (handy GUI even if not used by the app)
+  # Optional: Redis + RedisInsight (GUI only)
   redis:
     image: redis:7-alpine
     container_name: redis
@@ -139,12 +139,13 @@ services:
       PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
     depends_on: [redpanda]
     shm_size: "1gb"
-    command: ["node", "dist/src/worker.js"]
+    command: ["node","dist/src/worker.js"]
     ports: ["9100:9100"]
 
   ai_enricher:
     build:
       context: .
+      target: prod
     image: crawler-ai:prod
     container_name: ai_enricher
     environment:
@@ -157,7 +158,7 @@ services:
       AI_URL: http://ai:8001
       AI_PATH: /detect
     depends_on: [redpanda, ai]
-    command: ["node", "dist/src/ai-enricher.js"]
+    command: ["node","dist/src/ai-enricher.js"]
     ports: ["9102:9102"]
 
   collector_mongo:
@@ -174,10 +175,10 @@ services:
       DB_NAME: crawler
       COL_PAGES: pages
       COL_PRODUCTS: products
-      PRODUCT_URL_REGEX: '/[^/]+/(\\d+)(?:\\?.*)?$'
+      PRODUCT_URL_REGEX: '/[^/]+/(\d+)(?:\?.*)?$'
       METRICS_PORT: "9101"
     depends_on: [redpanda, mongo]
-    command: ["node", "dist/src/collector-mongo.js"]
+    command: ["node","dist/src/collector-mongo.js"]
     ports: ["9101:9101"]
 
   collector_s3:
@@ -194,7 +195,7 @@ services:
       METRICS_PORT: "9103"
     volumes: ["./data:/data"]
     depends_on: [redpanda]
-    command: ["node", "dist/src/collector-s3.js"]
+    command: ["node","dist/src/collector-s3.js"]
     ports: ["9103:9103"]
 
   collector_embed:
@@ -217,7 +218,7 @@ services:
       EMBEDDINGS_URL: http://embeddings:8002
       EMBEDDINGS_PATH: /embed
     depends_on: [redpanda, postgres, embeddings]
-    command: ["node", "dist/src/collector-embed.js"]
+    command: ["node","dist/src/collector-embed.js"]
     ports: ["9104:9104"]
 
 volumes:

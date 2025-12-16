@@ -1,5 +1,5 @@
 {
-  "name": "crawler",
+  "name": "crawler-event",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,12 +9,13 @@
     "dev:ai": "tsx src/ai-enricher.ts",
     "dev:collector:mongo": "tsx src/collector-mongo.ts",
     "dev:collector:s3": "tsx src/collector-s3.ts",
-    "dev:collector:embed": "tsx src/collector-embed.ts"
+    "dev:collector:embed": "tsx src/collector-embed.ts",
+    "refactor:names": "tsx scripts/renameIdentifiers.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.665.0",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
-    "@aws-sdk/client-s3": "^3.665.0",
     "cheerio": "^1.0.0",
     "kafkajs": "^2.2.4",
     "mongodb": "^6.9.0",
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.7",
+    "ts-morph": "^27.0.2",
     "tsx": "^4.19.1",
     "typescript": "^5.7.3"
   },

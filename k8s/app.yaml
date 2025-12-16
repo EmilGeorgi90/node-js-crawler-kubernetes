@@ -1,0 +1,234 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: crawler
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: crawler-env
+  namespace: crawler
+data:
+  KAFKA_BROKERS: "redpanda-redpanda.crawler.svc.cluster.local:9092"
+  KAFKA_CLIENT_ID: "crawler"
+  TOPIC_INITIAL: "crawl.initial"
+  TOPIC_REVISIT: "crawl.revisit"
+  TOPIC_PRIORITY: "crawl.priority"
+  TOPIC_RESULTS_DB: "results.db"
+  TOPIC_RESULTS_RAW: "results.raw"
+  TOPIC_ENRICHED: "results.enriched"
+  TOPIC_RETRY_30S: "crawl.initial.retry.30s"
+  TOPIC_RETRY_5M: "crawl.initial.retry.5m"
+  TOPIC_DLQ: "crawl.initial.dlq"
+  HEADLESS: "true"
+  STATIC_FIRST: "true"
+  INCLUDE_SELECTORS: ""
+  MAX_DEPTH: "3"
+  PUPPETEER_EXECUTABLE_PATH: "/usr/bin/chromium"
+  # Mongo / Postgres in Helm charts:
+  MONGO_URL: "mongodb://mongo-mongodb.crawler.svc.cluster.local:27017"
+  DB_NAME: "crawler"
+  COL_PAGES: "pages"
+  COL_PRODUCTS: "products"
+  PGHOST: "postgres-postgresql.crawler.svc.cluster.local"
+  PGPORT: "5432"
+  PGUSER: "postgres"
+  PGPASSWORD: "postgres"
+  PGDATABASE: "vector"
+  EMBEDDING_DIM: "384"
+  AI_URL: "http://ai.crawler.svc.cluster.local:8001"
+  AI_PATH: "/detect"
+  EMBEDDINGS_URL: "http://embeddings.crawler.svc.cluster.local:8002"
+  EMBEDDINGS_PATH: "/embed"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai
+  namespace: crawler
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ai } }
+  template:
+    metadata: { labels: { app: ai } }
+    spec:
+      containers:
+        - name: ai
+          image: crawler-ai:dev
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8001 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai
+  namespace: crawler
+spec:
+  selector: { app: ai }
+  ports: [{ port: 8001, targetPort: 8001 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embeddings
+  namespace: crawler
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: embeddings } }
+  template:
+    metadata: { labels: { app: embeddings } }
+    spec:
+      containers:
+        - name: embeddings
+          image: crawler-embeddings:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: VECTOR_DIM, valueFrom: { configMapKeyRef: { name: crawler-env, key: EMBEDDING_DIM } } }
+          ports: [{ containerPort: 8002 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: embeddings
+  namespace: crawler
+spec:
+  selector: { app: embeddings }
+  ports: [{ port: 8002, targetPort: 8002 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: crawler
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: worker } }
+  template:
+    metadata: { labels: { app: worker } }
+    spec:
+      containers:
+        - name: worker
+          image: crawler-worker:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node","dist/src/worker.js"]
+          envFrom: [{ configMapRef: { name: crawler-env } }]
+          ports: [{ containerPort: 9100 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker
+  namespace: crawler
+spec:
+  selector: { app: worker }
+  ports: [{ port: 9100, targetPort: 9100 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-enricher
+  namespace: crawler
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: ai-enricher } }
+  template:
+    metadata: { labels: { app: ai-enricher } }
+    spec:
+      containers:
+        - name: ai-enricher
+          image: crawler-ai-enricher:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node","dist/src/ai-enricher.js"]
+          envFrom: [{ configMapRef: { name: crawler-env } }]
+          ports: [{ containerPort: 9102 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-enricher
+  namespace: crawler
+spec:
+  selector: { app: ai-enricher }
+  ports: [{ port: 9102, targetPort: 9102 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: collector-mongo
+  namespace: crawler
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: collector-mongo } }
+  template:
+    metadata: { labels: { app: collector-mongo } }
+    spec:
+      containers:
+        - name: collector-mongo
+          image: crawler-collector-mongo:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node","dist/src/collector-mongo.js"]
+          envFrom: [{ configMapRef: { name: crawler-env } }]
+          ports: [{ containerPort: 9101 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: collector-mongo
+  namespace: crawler
+spec:
+  selector: { app: collector-mongo }
+  ports: [{ port: 9101, targetPort: 9101 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: collector-embed
+  namespace: crawler
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: collector-embed } }
+  template:
+    metadata: { labels: { app: collector-embed } }
+    spec:
+      containers:
+        - name: collector-embed
+          image: crawler-collector-embed:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node","dist/src/collector-embed.js"]
+          envFrom: [{ configMapRef: { name: crawler-env } }]
+          ports: [{ containerPort: 9104 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: collector-embed
+  namespace: crawler
+spec:
+  selector: { app: collector-embed }
+  ports: [{ port: 9104, targetPort: 9104 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: collector-s3
+  namespace: crawler
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: collector-s3 } }
+  template:
+    metadata: { labels: { app: collector-s3 } }
+    spec:
+      containers:
+        - name: collector-s3
+          image: crawler-collector-s3:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node","dist/src/collector-s3.js"]
+          envFrom: [{ configMapRef: { name: crawler-env } }]
+          env:
+            - { name: S3_DIR, value: "/lake" }
+          volumeMounts:
+            - { name: lake, mountPath: /lake }
+          ports: [{ containerPort: 9103 }]
+      volumes:
+        - name: lake
+          emptyDir: {}

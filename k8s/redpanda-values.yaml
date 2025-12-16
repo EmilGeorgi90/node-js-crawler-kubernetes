@@ -1,0 +1,15 @@
+statefulset:
+  replicas: 1
+
+listeners:
+  kafka:
+    port: 9092
+  admin:
+    port: 9644
+
+resources:
+  cpu:
+    cores: 1
+  memory:
+    container:
+      min: 512Mi

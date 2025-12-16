@@ -1,8 +1,8 @@
 import http from "node:http";
 import client from "prom-client";
 
-export const registry = new client.Registry();
-client.collectDefaultMetrics({ register: registry });
+export const metricsRegistry = new client.Registry();
+client.collectDefaultMetrics({ register: metricsRegistry });
 
 export type Cfg = {
   port?: number;
@@ -15,8 +15,8 @@ export function startMetricsServer({
 }: Cfg = {}) {
   const server = http.createServer(async (req, res) => {
     if (req.url === "/metrics") {
-      const body = await registry.metrics();
-      res.writeHead(200, { "Content-Type": registry.contentType });
+      const body = await metricsRegistry.metrics();
+      res.writeHead(200, { "Content-Type": metricsRegistry.contentType });
       return res.end(body);
     }
     res.writeHead(200, { "Content-Type": "text/plain" });
@@ -30,12 +30,12 @@ export function startMetricsServer({
 
 export function counter(name: string, help: string, labelNames: string[] = []) {
   const c = new client.Counter({ name, help, labelNames });
-  registry.registerMetric(c);
+  metricsRegistry.registerMetric(c);
   return c;
 }
 export function gauge(name: string, help: string, labelNames: string[] = []) {
   const g = new client.Gauge({ name, help, labelNames });
-  registry.registerMetric(g);
+  metricsRegistry.registerMetric(g);
   return g;
 }
 export function histogram(
@@ -45,6 +45,6 @@ export function histogram(
   labelNames: string[] = []
 ) {
   const h = new client.Histogram({ name, help, buckets, labelNames });
-  registry.registerMetric(h);
+  metricsRegistry.registerMetric(h);
   return h;
 }
