@@ -1,4 +1,4 @@
-# Event‑Driven Crawler (Kafka + Mandatory AI & Embeddings)
+# Event‑Driven Crawler
 
 Fully containerized, event‑driven web crawler using **Kafka (Redpanda)**, **MongoDB**, **Postgres/pgvector**, and **Prometheus/Grafana**. The pipeline enforces an external **AI classifier** and **Embeddings** service (both required) and persists:
 
