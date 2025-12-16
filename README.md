@@ -1,6 +1,6 @@
 # Event‑Driven Crawler
 
-Fully containerized, event‑driven web crawler using **Kafka (Redpanda)**, **MongoDB**, **Postgres/pgvector**, and **Prometheus/Grafana**. The pipeline enforces an external **AI classifier** and **Embeddings** service (both required) and persists:
+Fully containerized, event‑driven web crawler using **Kafka (Redpanda)**, **MongoDB**, **Postgres/pgvector**, and **Prometheus/Grafana**. The pipeline enforces an external **AI classifier** and **Embeddings** service:
 
 * **Raw NDJSON** to a local data lake (or S3 later)
 * **Structured pages/products** to **MongoDB**
