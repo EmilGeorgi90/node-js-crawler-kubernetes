@@ -124,12 +124,12 @@ Most knobs are set via environment variables in `docker-compose.yml`. Key ones:
 * `MAX_DEPTH=3` — crawl depth
 * `PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium` — system Chromium in container
 
-**AI Enricher (mandatory)**
+**AI Enricher**
 
 * `AI_URL=http://ai:8001`
 * `AI_PATH=/detect`
 
-**Collector Embed (mandatory)**
+**Collector Embed**
 
 * `EMBEDDINGS_URL=http://embeddings:8002`
 * `EMBEDDINGS_PATH=/embed`
