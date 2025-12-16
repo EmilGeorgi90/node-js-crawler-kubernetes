@@ -19,13 +19,13 @@ A Redpanda Console, Mongo Express, pgAdmin, Grafana & Prometheus are included.
                  worker (Puppeteer/cheerio)
                         |                     \
                         v                      v
-                  results.db  -------------> ai_enricher (mandatory)
+                  results.db  -------------> ai_enricher
                         |                         |
                         v                         v
                  collector_mongo            results.enriched
                         |                         |
                         v                         v
-                  MongoDB (pages, products)   collector_embed (mandatory)
+                  MongoDB (pages, products)   collector_embed
                                                 |
                                                 v
                                        Postgres + pgvector
